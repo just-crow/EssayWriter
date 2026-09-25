@@ -22,7 +22,10 @@ interface Job extends Omit<JobSnapshot, "elapsedSec"> {
   onAttempt?: (attempt: number, maxAttempts: number) => void;
 }
 
-const memoryJobs = new Map<string, Job>();
+const globalForJobs = globalThis as unknown as { __jobsMap?: Map<string, Job> };
+const memoryJobs = globalForJobs.__jobsMap ?? new Map<string, Job>();
+if (process.env.NODE_ENV !== "production") globalForJobs.__jobsMap = memoryJobs;
+
 const MAX_STORED = 100;
 
 function snap(j: Job): JobSnapshot {
@@ -62,7 +65,7 @@ export async function createJob(kind: string, maxAttempts: number): Promise<JobS
   }
 
   try {
-    await supabase.from("Job").insert({
+    const { error } = await supabase.from("Job").insert({
       id,
       kind,
       status: "queued",
@@ -74,8 +77,11 @@ export async function createJob(kind: string, maxAttempts: number): Promise<JobS
       result: null,
       error: "",
     });
-  } catch {
-    // fallback
+    if (error) {
+      console.warn("Supabase createJob notice:", error.message);
+    }
+  } catch (err) {
+    console.warn("Supabase createJob exception:", err);
   }
 
   return snap(job);
@@ -103,8 +109,8 @@ export async function getJob(id: string): Promise<JobSnapshot | null> {
       memoryJobs.set(id, updatedJob);
       return snap(updatedJob);
     }
-  } catch {
-    // fallback
+  } catch (err) {
+    console.warn("Supabase getJob exception:", err);
   }
 
   return mem ? snap(mem) : null;
@@ -116,8 +122,8 @@ export interface JobReporter {
   stage(s: string): void;
 }
 
-/** Run fn in the background, tracking attempts and stages. Never throws. */
-export function runJob<T>(id: string, fn: (r: JobReporter) => Promise<T>): void {
+/** Run fn and track attempts/stages in memory and Supabase. */
+export async function runJobAsync<T>(id: string, fn: (r: JobReporter) => Promise<T>): Promise<void> {
   const job = memoryJobs.get(id) || {
     id,
     kind: "sources",
@@ -132,7 +138,11 @@ export function runJob<T>(id: string, fn: (r: JobReporter) => Promise<T>): void 
   job.updatedAt = Date.now();
   memoryJobs.set(id, job);
 
-  void supabase.from("Job").update({ status: "running", updatedAt: Date.now() }).eq("id", id);
+  try {
+    await supabase.from("Job").update({ status: "running", updatedAt: Date.now() }).eq("id", id);
+  } catch {
+    // fallback
+  }
 
   const reporter: JobReporter = {
     attempt(n: number) {
@@ -150,27 +160,37 @@ export function runJob<T>(id: string, fn: (r: JobReporter) => Promise<T>): void 
     },
   };
 
-  void (async () => {
+  try {
+    const result = await fn(reporter);
+    const done = memoryJobs.get(id) || job;
+    done.status = "done";
+    done.result = result;
+    done.updatedAt = Date.now();
     try {
-      const result = await fn(reporter);
-      const done = memoryJobs.get(id) || job;
-      done.status = "done";
-      done.result = result;
-      done.updatedAt = Date.now();
       await supabase
         .from("Job")
         .update({ status: "done", result, updatedAt: Date.now() })
         .eq("id", id);
-    } catch (err) {
-      const failed = memoryJobs.get(id) || job;
-      const errorMsg = err instanceof Error ? err.message : "Job failed.";
-      failed.status = "error";
-      failed.error = errorMsg;
-      failed.updatedAt = Date.now();
+    } catch {
+      // fallback
+    }
+  } catch (err) {
+    const failed = memoryJobs.get(id) || job;
+    const errorMsg = err instanceof Error ? err.message : "Job failed.";
+    failed.status = "error";
+    failed.error = errorMsg;
+    failed.updatedAt = Date.now();
+    try {
       await supabase
         .from("Job")
         .update({ status: "error", error: errorMsg, updatedAt: Date.now() })
         .eq("id", id);
+    } catch {
+      // fallback
     }
-  })();
+  }
+}
+
+export function runJob<T>(id: string, fn: (r: JobReporter) => Promise<T>): void {
+  void runJobAsync(id, fn);
 }
