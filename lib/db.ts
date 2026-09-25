@@ -6,7 +6,10 @@ const supabaseUrl =
   process.env.SUPABASE_URL ||
   "https://jytsedkofmigbrwdyxry.supabase.co";
 
-// Server-side secret key first (bypasses RLS); publishable key as fallback.
+// Server-side service-role key first: verified working against this
+// project and bypasses RLS entirely, so persistence never depends on the
+// anon policies. Publishable (anon) key as fallback — it only works while
+// the dev RLS policies in supabase/schema.sql are open.
 const supabaseKey =
   process.env.SUPABASE_SECRET_KEY ||
   process.env.SUPABASE_PUBLISHABLE_KEY ||

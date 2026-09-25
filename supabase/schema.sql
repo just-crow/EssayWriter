@@ -69,3 +69,26 @@ CREATE TABLE IF NOT EXISTS "Job" (
   "result" JSONB,
   "error" TEXT NOT NULL DEFAULT ''
 );
+
+-- Dev-convenience Row Level Security: allow the anon (publishable) key full
+-- access so the app works even without a valid secret key. The server
+-- prefers SUPABASE_SECRET_KEY (bypasses RLS entirely) when it works.
+-- NOTE: anyone holding your publishable key + project URL can read/write
+-- these tables while these policies exist. Fine for local development;
+-- tighten them before any shared deployment.
+ALTER TABLE "Project" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "EssayVersion" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "Source" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "ChatMessage" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "Job" ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "dev anon all" ON "Project";
+DROP POLICY IF EXISTS "dev anon all" ON "EssayVersion";
+DROP POLICY IF EXISTS "dev anon all" ON "Source";
+DROP POLICY IF EXISTS "dev anon all" ON "ChatMessage";
+DROP POLICY IF EXISTS "dev anon all" ON "Job";
+CREATE POLICY "dev anon all" ON "Project" FOR ALL TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "dev anon all" ON "EssayVersion" FOR ALL TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "dev anon all" ON "Source" FOR ALL TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "dev anon all" ON "ChatMessage" FOR ALL TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "dev anon all" ON "Job" FOR ALL TO anon USING (true) WITH CHECK (true);
