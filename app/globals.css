@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* ---- EssayWriter Studio (additive) ---- */
+.essay-studio {
+  color-scheme: light;
+}
+
+/* .docx preview: paper pages on a stone desk */
+.docx-preview-wrap {
+  overflow-x: auto;
+  border-radius: 0.75rem;
+  background: #ddd9d4;
+  padding: 24px 16px;
+  min-height: 16rem;
+  border: 1px solid #d6d0c9;
+}
+
+.docx-preview-wrap .docx-wrapper {
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+.docx-preview-wrap section.docx {
+  margin: 0 auto 16px !important;
+  border-radius: 2px;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.14),
+    0 8px 28px rgb(0 0 0 / 0.12);
+}
+
+.docx-preview-wrap section.docx:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* Long URLs must wrap instead of spilling off the page */
+.docx-preview-wrap a {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Footnote references rendered by the docx library: make them visible
+   and tappable (they jump to the Footnotes card below). */
+.docx-preview-wrap .docx_footnotereference {
+  cursor: pointer;
+}
+
+.docx-preview-wrap .docx_footnotereference sup {
+  font-size: 0.78em;
+  font-weight: 700;
+  vertical-align: super;
+  line-height: 0;
+  letter-spacing: 0.01em;
+}
+
+.docx-preview-wrap .docx_footnotereference:hover sup {
+  color: #065f46;
+  text-decoration: underline;
+}
+
+/* Text fallback when the .docx blob cannot render */
+.essay-fallback-serif {
+  font-family: "Times New Roman", Times, Georgia, serif;
+  line-height: 1.75;
+}
+
+.essay-fallback-serif p {
+  margin: 0 0 1em;
+  text-align: justify;
+}
+
+.essay-fallback-serif h4 {
+  margin: 1.25em 0 0.5em;
+}
+
+.essay-fallback-serif .footnotes {
+  margin-top: 1.5em;
+  font-size: 0.85em;
+  line-height: 1.6;
+}
+
+.essay-fallback-serif .footnotes ol {
+  padding-left: 1.25rem;
+}
+
+.essay-fallback-serif .footnotes li {
+  margin-bottom: 0.4em;
+}

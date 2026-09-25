@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id           String        @id @default(cuid())
+  title        String        @default("Untitled essay")
+  topic        String        @default("")
+  instruction  String        @default("")
+  wordTarget   Int           @default(1200)
+  mode         String        @default("staged")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  versions     EssayVersion[]
+  sources      Source[]
+  messages     ChatMessage[]
+}
+
+model EssayVersion {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version     Int      @default(1)
+  title       String   @default("")
+  essayJson   String   @default("{}")
+  docxPath    String   @default("")
+  wordCount   Int      @default(0)
+  footnoteCount Int    @default(0)
+  summary     String   @default("")
+  createdAt   DateTime @default(now())
+
+  @@index([projectId])
+}
+
+model Source {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  author    String   @default("")
+  title     String   @default("")
+  publisher String   @default("")
+  year      String   @default("")
+  url       String   @default("")
+  accessed  String   @default("")
+  supports  String   @default("")
+  content   String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  role      String   @default("user")
+  content   String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+}
