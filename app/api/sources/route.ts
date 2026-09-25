@@ -126,7 +126,7 @@ export async function runSourcesPipeline(
 export async function POST(req: Request) {
   try {
     const body = Body.parse(await req.json());
-    const job = createJob("sources", JOB_TRIES);
+    const job = await createJob("sources", JOB_TRIES);
     runJob(job.id, (r) =>
       runSourcesPipeline(body, (s) => r.stage(s))
     );

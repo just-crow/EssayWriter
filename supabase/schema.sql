@@ -55,3 +55,17 @@ CREATE TABLE IF NOT EXISTS "ChatMessage" (
 );
 
 CREATE INDEX IF NOT EXISTS "ChatMessage_projectId_idx" ON "ChatMessage"("projectId");
+
+-- Create Job table
+CREATE TABLE IF NOT EXISTS "Job" (
+  "id" TEXT PRIMARY KEY,
+  "kind" TEXT NOT NULL DEFAULT '',
+  "status" TEXT NOT NULL DEFAULT 'queued',
+  "attempt" INTEGER NOT NULL DEFAULT 0,
+  "maxAttempts" INTEGER NOT NULL DEFAULT 1,
+  "stage" TEXT NOT NULL DEFAULT '',
+  "startedAt" BIGINT NOT NULL DEFAULT 0,
+  "updatedAt" BIGINT NOT NULL DEFAULT 0,
+  "result" JSONB,
+  "error" TEXT NOT NULL DEFAULT ''
+);

@@ -1,9 +1,4 @@
-/**
- * Minimal in-process job store for long model stages.
- * POST /api/sources returns a jobId in milliseconds; the client polls
- * GET /api/jobs/[id] for attempt/elapsed/result. Local-only single process,
- * so an in-memory Map is sufficient (jobs vanish on server restart).
- */
+import { supabase } from "@/lib/db";
 
 export type JobStatus = "queued" | "running" | "done" | "error";
 
@@ -27,7 +22,7 @@ interface Job extends Omit<JobSnapshot, "elapsedSec"> {
   onAttempt?: (attempt: number, maxAttempts: number) => void;
 }
 
-const jobs = new Map<string, Job>();
+const memoryJobs = new Map<string, Job>();
 const MAX_STORED = 100;
 
 function snap(j: Job): JobSnapshot {
@@ -47,7 +42,7 @@ function snap(j: Job): JobSnapshot {
   };
 }
 
-export function createJob(kind: string, maxAttempts: number): JobSnapshot {
+export async function createJob(kind: string, maxAttempts: number): Promise<JobSnapshot> {
   const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const now = Date.now();
   const job: Job = {
@@ -60,17 +55,59 @@ export function createJob(kind: string, maxAttempts: number): JobSnapshot {
     startedAt: now,
     updatedAt: now,
   };
-  jobs.set(id, job);
-  if (jobs.size > MAX_STORED) {
-    const oldest = [...jobs.values()].sort((a, b) => a.startedAt - b.startedAt)[0];
-    if (oldest) jobs.delete(oldest.id);
+  memoryJobs.set(id, job);
+  if (memoryJobs.size > MAX_STORED) {
+    const oldest = [...memoryJobs.values()].sort((a, b) => a.startedAt - b.startedAt)[0];
+    if (oldest) memoryJobs.delete(oldest.id);
   }
+
+  try {
+    await supabase.from("Job").insert({
+      id,
+      kind,
+      status: "queued",
+      attempt: 0,
+      maxAttempts,
+      stage: "",
+      startedAt: now,
+      updatedAt: now,
+      result: null,
+      error: "",
+    });
+  } catch {
+    // fallback
+  }
+
   return snap(job);
 }
 
-export function getJob(id: string): JobSnapshot | null {
-  const j = jobs.get(id);
-  return j ? snap(j) : null;
+export async function getJob(id: string): Promise<JobSnapshot | null> {
+  const mem = memoryJobs.get(id);
+
+  try {
+    const { data, error } = await supabase.from("Job").select("*").eq("id", id).maybeSingle();
+    if (!error && data) {
+      const now = Date.now();
+      const updatedJob: Job = {
+        id: String(data.id),
+        kind: String(data.kind ?? ""),
+        status: (data.status as JobStatus) || "queued",
+        attempt: Number(data.attempt ?? 0),
+        maxAttempts: Number(data.maxAttempts ?? 1),
+        stage: String(data.stage ?? ""),
+        startedAt: Number(data.startedAt ?? now),
+        updatedAt: Number(data.updatedAt ?? now),
+        result: data.result,
+        error: String(data.error ?? ""),
+      };
+      memoryJobs.set(id, updatedJob);
+      return snap(updatedJob);
+    }
+  } catch {
+    // fallback
+  }
+
+  return mem ? snap(mem) : null;
 }
 
 /** Progress reporter handed to background work. */
@@ -81,43 +118,59 @@ export interface JobReporter {
 
 /** Run fn in the background, tracking attempts and stages. Never throws. */
 export function runJob<T>(id: string, fn: (r: JobReporter) => Promise<T>): void {
-  const job = jobs.get(id);
-  if (!job) return;
+  const job = memoryJobs.get(id) || {
+    id,
+    kind: "sources",
+    status: "running" as JobStatus,
+    attempt: 0,
+    maxAttempts: 1,
+    stage: "",
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
   job.status = "running";
   job.updatedAt = Date.now();
+  memoryJobs.set(id, job);
+
+  void supabase.from("Job").update({ status: "running", updatedAt: Date.now() }).eq("id", id);
+
   const reporter: JobReporter = {
     attempt(n: number) {
-      const j = jobs.get(id);
-      if (j) {
-        j.attempt = n;
-        j.updatedAt = Date.now();
-        j.onAttempt?.(n, j.maxAttempts);
-      }
+      const j = memoryJobs.get(id) || job;
+      j.attempt = n;
+      j.updatedAt = Date.now();
+      j.onAttempt?.(n, j.maxAttempts);
+      void supabase.from("Job").update({ attempt: n, updatedAt: Date.now() }).eq("id", id);
     },
     stage(s: string) {
-      const j = jobs.get(id);
-      if (j) {
-        j.stage = s;
-        j.updatedAt = Date.now();
-      }
+      const j = memoryJobs.get(id) || job;
+      j.stage = s;
+      j.updatedAt = Date.now();
+      void supabase.from("Job").update({ stage: s, updatedAt: Date.now() }).eq("id", id);
     },
   };
+
   void (async () => {
     try {
       const result = await fn(reporter);
-      const done = jobs.get(id);
-      if (done) {
-        done.status = "done";
-        done.result = result;
-        done.updatedAt = Date.now();
-      }
+      const done = memoryJobs.get(id) || job;
+      done.status = "done";
+      done.result = result;
+      done.updatedAt = Date.now();
+      await supabase
+        .from("Job")
+        .update({ status: "done", result, updatedAt: Date.now() })
+        .eq("id", id);
     } catch (err) {
-      const failed = jobs.get(id);
-      if (failed) {
-        failed.status = "error";
-        failed.error = err instanceof Error ? err.message : "Job failed.";
-        failed.updatedAt = Date.now();
-      }
+      const failed = memoryJobs.get(id) || job;
+      const errorMsg = err instanceof Error ? err.message : "Job failed.";
+      failed.status = "error";
+      failed.error = errorMsg;
+      failed.updatedAt = Date.now();
+      await supabase
+        .from("Job")
+        .update({ status: "error", error: errorMsg, updatedAt: Date.now() })
+        .eq("id", id);
     }
   })();
 }
