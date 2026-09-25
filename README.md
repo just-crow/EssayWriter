@@ -1,5 +1,15 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## EssayWriter Studio + Supabase
+
+Copy `.env.example` to `.env.local` and fill in `NVIDIA_NIM_API_KEY`,
+`TAVILY_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, and `SUPABASE_SECRET_KEY`
+(find the last two under Supabase dashboard → Project Settings → Data API).
+
+Create the tables once: open Supabase dashboard → SQL Editor → run the
+statements in `supabase/schema.sql`. Without them (or without keys) the app
+keeps working on an in-memory fallback, but nothing persists across restarts.
+
 ## Getting Started
 
 First, run the development server:
