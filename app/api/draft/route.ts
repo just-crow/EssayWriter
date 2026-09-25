@@ -6,7 +6,7 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { DRAFT_SYSTEM, draftUserPrompt } from "@/lib/prompts";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, assertDraftUsable } from "@/lib/validate";
+import { validateDraft, assertDraftUsable, pruneOrphanFootnotes, expandFootnoteUses } from "@/lib/validate";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -47,6 +47,15 @@ export async function POST(req: Request) {
       },
       nimChatLong
     );
+    // Repair, don't reject: drop uncited footnote entries (and renumber),
+    // so every listed citation is visible in Word and the preview.
+    pruneOrphanFootnotes(draft);
+    // Word needs one unique footnote definition per in-text reference,
+    // so expand each citation occurrence into its own full entry.
+    expandFootnoteUses(draft);
+    if (draft.footnotes.length === 0) {
+      throw new Error("The essay came back without usable citations. Try again.");
+    }
     const issues = validateDraft(draft);
     const wordCount = countWords(draft);
     const buffer = await buildDocx(draft);

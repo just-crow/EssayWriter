@@ -36,6 +36,7 @@ ${GLOBAL_STYLE_RULES}
 STAGE 3, DRAFT. Write the full essay from the approved outline and the approved source texts below.
 The sources carry full page text in their "content" field. Every factual claim must come from those texts, from common knowledge, or from logical conclusions from text already given. When a source has empty content, rely only on its verified metadata plus common knowledge.
 Paragraph text uses footnote markers like [^1], [^2] at the end of sentences that need them. Every marker MUST have a matching entry in "footnotes".
+MANDATORY: every footnote id 1..N MUST appear at least once as [^id] somewhere in introduction, sections, or conclusion. A footnote entry with no matching in-text marker is a defect. Do not list a source you never cite.
 Return ONLY valid JSON with this shape:
 {
   "title": "...",
@@ -55,6 +56,7 @@ ${GLOBAL_STYLE_RULES}
 
 You revise an existing essay. The user gives an instruction (fix a paragraph, add analysis, shorten, adjust tone, satisfy a strand).
 Keep everything else stable. Keep all existing footnotes unless the claim changed. Add new footnotes for new claims.
+Preserve every existing [^n] marker in the text. MANDATORY: every footnote id must appear at least once as [^id] in the text; a footnote entry with no matching marker is a defect.
 Return ONLY valid JSON in the same DRAFT shape: title, introduction, sections, conclusion, footnotes, worksCited, coverage.
 `.trim();
 

@@ -6,7 +6,7 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, assertDraftUsable } from "@/lib/validate";
+import { validateDraft, assertDraftUsable, pruneOrphanFootnotes, expandFootnoteUses } from "@/lib/validate";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -48,6 +48,11 @@ export async function POST(req: Request) {
       },
       nimChatLong
     );
+    pruneOrphanFootnotes(draft);
+    expandFootnoteUses(draft);
+    if (draft.footnotes.length === 0) {
+      throw new Error("The revision came back without usable citations. Try again.");
+    }
     const issues = validateDraft(draft);
     const wordCount = countWords(draft);
     const buffer = await buildDocx(draft);
