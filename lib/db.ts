@@ -258,7 +258,10 @@ export const prisma = {
     async findMany(args?: {
       orderBy?: { updatedAt?: "asc" | "desc" };
       take?: number;
-      include?: { versions?: { take?: number }; _count?: boolean };
+      include?: {
+        versions?: { orderBy?: { version?: "asc" | "desc" }; take?: number } | boolean;
+        _count?: { select?: { versions?: boolean } } | boolean;
+      };
     }): Promise<Array<ProjectRecord & { versions?: EssayVersionRecord[]; _count?: { versions: number } }>> {
       let projects: ProjectRecord[] = [];
       try {
@@ -322,8 +325,9 @@ export const prisma = {
             count = versionsForProject.length;
           }
 
-          if (args.include.versions?.take) {
-            versionsForProject = versionsForProject.slice(0, args.include.versions.take);
+          const versionIncludeOpts = typeof args.include.versions === "object" ? args.include.versions : {};
+          if (versionIncludeOpts.take) {
+            versionsForProject = versionsForProject.slice(0, versionIncludeOpts.take);
           }
         }
 
