@@ -132,6 +132,20 @@ export default function StudioPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topic, instructionText, wordTarget, projectId, outlineBusy]);
 
+  /** Shared apply step for both source-response shapes:
+   * { jobId } -> poll to completion; { sources, ... } -> already final
+   * (serverless mode runs the pipeline synchronously). */
+  const applySources = (result: {
+    sources: SourceItem[];
+    liveSearchUsed: boolean;
+    liveHits: number;
+  }) => {
+    setSources(result.sources);
+    setLiveSearchUsed(result.liveSearchUsed);
+    setLiveHits(result.liveHits);
+    setSourcesApproved(false);
+  };
+
   const gatherSources = useCallback(async () => {
     if (!structure || sourcesBusy || inflight.current.sources) return;
     inflight.current.sources = true;
@@ -139,28 +153,41 @@ export default function StudioPage() {
     setSourcesBusy(true);
     setSourcesJob(null);
     try {
-      const started = await postJSON<{ jobId: string }>("/api/sources", {
+      const started = await postJSON<
+        { jobId: string } & {
+          sources?: SourceItem[];
+          liveSearchUsed?: boolean;
+          liveHits?: number;
+        }
+      >("/api/sources", {
         topic: topic.trim(),
         structureJson: JSON.stringify(structure),
         projectId: projectId ?? undefined,
         needed: 12,
       });
-      const job = await pollJob(started.jobId, setSourcesJob);
-      const result = job.result as unknown as {
-        sources: SourceItem[];
-        liveSearchUsed: boolean;
-        liveHits: number;
-      };
-      setSources(result.sources);
-      setLiveSearchUsed(result.liveSearchUsed);
-      setLiveHits(result.liveHits);
-      setSourcesApproved(false);
+      if (started.sources) {
+        applySources({
+          sources: started.sources,
+          liveSearchUsed: started.liveSearchUsed ?? true,
+          liveHits: started.liveHits ?? 0,
+        });
+      } else {
+        const job = await pollJob(started.jobId, setSourcesJob);
+        applySources(
+          job.result as unknown as {
+            sources: SourceItem[];
+            liveSearchUsed: boolean;
+            liveHits: number;
+          }
+        );
+      }
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Sources failed.");
     } finally {
       inflight.current.sources = false;
       setSourcesBusy(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [structure, topic, projectId, sourcesBusy]);
 
   const draftEssay = useCallback(async () => {
@@ -215,21 +242,36 @@ export default function StudioPage() {
       setOutlineApproved(true);
       setOutlineBusy(false);
 
-      // Stage 2: sources (background job + poll)
+      // Stage 2: sources (job+poll locally, synchronous on serverless)
       setSourcesBusy(true);
       setSourcesJob(null);
-      const started = await postJSON<{ jobId: string }>("/api/sources", {
+      const started = await postJSON<
+        { jobId: string } & {
+          sources?: SourceItem[];
+          liveSearchUsed?: boolean;
+          liveHits?: number;
+        }
+      >("/api/sources", {
         topic: topic.trim(),
         structureJson: JSON.stringify(outline.structure),
         projectId: pid,
         needed: 12,
       });
-      const job = await pollJob(started.jobId, setSourcesJob);
-      const found = job.result as unknown as {
-        sources: SourceItem[];
-        liveSearchUsed: boolean;
-        liveHits: number;
-      };
+      const found: { sources: SourceItem[]; liveSearchUsed: boolean; liveHits: number } =
+        started.sources
+          ? {
+              sources: started.sources,
+              liveSearchUsed: started.liveSearchUsed ?? true,
+              liveHits: started.liveHits ?? 0,
+            }
+          : await (async () => {
+              const job = await pollJob(started.jobId as string, setSourcesJob);
+              return job.result as unknown as {
+                sources: SourceItem[];
+                liveSearchUsed: boolean;
+                liveHits: number;
+              };
+            })();
       setSources(found.sources);
       setLiveSearchUsed(found.liveSearchUsed);
       setLiveHits(found.liveHits);

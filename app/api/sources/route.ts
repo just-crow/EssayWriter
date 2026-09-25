@@ -126,6 +126,16 @@ export async function runSourcesPipeline(
 export async function POST(req: Request) {
   try {
     const body = Body.parse(await req.json());
+
+    // Serverless (Vercel): background work after the response gets frozen,
+    // so a queued job would never run and the client would poll forever.
+    // Run the pipeline synchronously and return the full result instead.
+    if (process.env.VERCEL) {
+      const result = await runSourcesPipeline(body);
+      return NextResponse.json({ ...result, jobId: null });
+    }
+
+    // Long-lived local server: background job + polling for live progress.
     const job = await createJob("sources", JOB_TRIES);
     runJob(job.id, (r) =>
       runSourcesPipeline(body, (s) => r.stage(s))
