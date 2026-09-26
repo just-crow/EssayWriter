@@ -71,6 +71,9 @@ function normQuote(s: string): string {
     .replace(/&#39;|&apos;/g, "'")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
+    .replace(/[—–]/g, "-")
+    .replace(/(\.{3}|…)$/, "")
+    .replace(/^["'`“”‘’\s]+|["'`“”‘’\s]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -220,8 +223,8 @@ function wordSet(s: string): Set<string> {
 }
 
 /** Replace a close paraphrase in an evidence record with the nearest exact
- * source sentence. This never crosses sources and requires substantial word
- * overlap, so unrelated or invented evidence still fails assertGrounding. */
+ * source sentence. Searches the assigned source first, and if ungrounded,
+ * checks all other gathered sources for a verifiable match. */
 export function repairEvidenceQuotes(
   evidence: EvidenceItem[],
   footnotes: Array<{ id: number; url?: string }>,
@@ -233,33 +236,76 @@ export function repairEvidenceQuotes(
   for (const item of evidence) {
     const source = byId.get(item.source);
     const text = sourcesText.get(normalizeUrl(source?.url || "")) || "";
-    if (!text || normQuote(text).includes(normQuote(item.quote || ""))) continue;
-    const wanted = wordSet(`${item.quote} ${paragraphs[item.paragraph] || ""}`);
-    if (wanted.size < 5) continue;
-    const candidates = text
-      .split(/(?<=[.!?])\s+|\n+/)
-      .map((s) => s.replace(/^[-*#>\s]+/, "").trim())
-      .filter((s) => s.length >= 12 && s.length <= 700);
-    // Some extracted pages are one long punctuation-free snippet. Add
-    // overlapping verbatim windows so those sources remain repairable.
-    const sourceWords = text.split(/\s+/).filter(Boolean);
-    for (let start = 0; start < sourceWords.length; start += 30) {
-      const window = sourceWords.slice(start, start + 60).join(" ").trim();
-      if (window.length >= 12) candidates.push(window);
-    }
-    let best = "";
-    let bestScore = 0;
-    for (const candidate of candidates) {
-      const words = wordSet(candidate);
-      const overlap = [...wanted].filter((word) => words.has(word)).length;
-      const score = overlap / Math.max(1, Math.min(wanted.size, words.size));
-      if (overlap >= 2 && score > bestScore) {
-        best = candidate;
-        bestScore = score;
+    if (text && normQuote(text).includes(normQuote(item.quote || ""))) continue;
+
+    const cleanQuote = (item.quote || "").replace(/(\.\.\.|…)$/, "").trim();
+    if (text && cleanQuote.length >= 12 && normQuote(text).includes(normQuote(cleanQuote))) {
+      const candidateContaining = text
+        .split(/(?<=[.!?])\s+|\n+/)
+        .map((s) => s.replace(/^[-*#>\s]+/, "").trim())
+        .find((s) => normQuote(s).includes(normQuote(cleanQuote)));
+      if (candidateContaining) {
+        item.quote = candidateContaining;
+        repaired++;
+        continue;
       }
     }
-    if (best && bestScore >= 0.1) {
-      item.quote = best;
+
+    const wanted = wordSet(`${item.quote} ${paragraphs[item.paragraph] || ""}`);
+    if (wanted.size < 3) continue;
+
+    const evaluate = (srcText: string) => {
+      const candidates = srcText
+        .split(/(?<=[.!?])\s+|\n+/)
+        .map((s) => s.replace(/^[-*#>\s]+/, "").trim())
+        .filter((s) => s.length >= 12 && s.length <= 700);
+      const sourceWords = srcText.split(/\s+/).filter(Boolean);
+      for (let start = 0; start < sourceWords.length; start += 30) {
+        const window = sourceWords.slice(start, start + 60).join(" ").trim();
+        if (window.length >= 12) candidates.push(window);
+      }
+      let best = "";
+      let bestScore = 0;
+      for (const candidate of candidates) {
+        const words = wordSet(candidate);
+        const overlap = [...wanted].filter((word) => words.has(word)).length;
+        const score = overlap / Math.max(1, Math.min(wanted.size, words.size));
+        if (overlap >= 2 && score > bestScore) {
+          best = candidate;
+          bestScore = score;
+        }
+      }
+      return { best, score: bestScore };
+    };
+
+    let result = text ? evaluate(text) : { best: "", score: 0 };
+
+    // If assigned source has no candidate with score >= 0.1, check across other sources
+    if ((!result.best || result.score < 0.1) && sourcesText.size > 0) {
+      const assignedNorm = normalizeUrl(source?.url || "");
+      for (const [otherUrl, otherText] of sourcesText.entries()) {
+        if (!otherText || otherUrl === assignedNorm) continue;
+        if (cleanQuote.length >= 12 && normQuote(otherText).includes(normQuote(cleanQuote))) {
+          const candidateContaining = otherText
+            .split(/(?<=[.!?])\s+|\n+/)
+            .map((s) => s.replace(/^[-*#>\s]+/, "").trim())
+            .find((s) => normQuote(s).includes(normQuote(cleanQuote)));
+          if (candidateContaining) {
+            result = { best: candidateContaining, score: 1.0 };
+            if (source && !text) source.url = otherUrl;
+            break;
+          }
+        }
+        const otherRes = evaluate(otherText);
+        if (otherRes.score > result.score && otherRes.score >= 0.2) {
+          result = otherRes;
+          if (source && !text) source.url = otherUrl;
+        }
+      }
+    }
+
+    if (result.best && result.score >= 0.1) {
+      item.quote = result.best;
       repaired++;
     }
   }
@@ -281,17 +327,36 @@ export function prepareDraft(draft: EssayDraft, sourcesText: Map<string, string>
       if (!defined.has(Number(match[1]))) throw new Error(`Citation [^${match[1]}] has no footnote. Supply its source or remove the unsupported claim.`);
     }
   }
+  const byId = new Map(draft.footnotes.map((f) => [f.id, f]));
   const grounded = new Set(draft.evidence.map((item) => item.paragraph));
   const missing = paragraphs.map((_text, paragraph) => paragraph).filter((paragraph) => !grounded.has(paragraph));
   for (const paragraph of missing) {
     const marker = paragraphs[paragraph].match(/\[\^(\d+)\]/);
     const source = marker ? Number(marker[1]) : 0;
-    if (!source || !defined.has(source)) {
-      continue;
+    if (!source || !defined.has(source)) continue;
+    const fn = byId.get(source);
+    const text = sourcesText.get(normalizeUrl(fn?.url || "")) || "";
+    if (!text) continue;
+    const wanted = wordSet(paragraphs[paragraph]);
+    if (wanted.size < 3) continue;
+    const candidates = text
+      .split(/(?<=[.!?])\s+|\n+/)
+      .map((s) => s.replace(/^[-*#>\s]+/, "").trim())
+      .filter((s) => s.length >= 12 && s.length <= 700);
+    let best = "";
+    let bestScore = 0;
+    for (const candidate of candidates) {
+      const words = wordSet(candidate);
+      const overlap = [...wanted].filter((w) => words.has(w)).length;
+      const score = overlap / Math.max(1, Math.min(wanted.size, words.size));
+      if (overlap >= 2 && score > bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
     }
-    // The exact quote is selected from this same source below. The semantic
-    // audit later decides whether that source actually entails the claim.
-    draft.evidence.push({ paragraph, source, quote: paragraphs[paragraph].replace(/\[\^\d+\]/g, "") });
+    if (best && bestScore >= 0.1) {
+      draft.evidence.push({ paragraph, source, quote: best });
+    }
   }
   repairEvidenceQuotes(draft.evidence, draft.footnotes, sourcesText, paragraphs);
   assertGrounding(draft, sourcesText);
@@ -312,12 +377,6 @@ export function prepareDraft(draft: EssayDraft, sourcesText: Map<string, string>
   assertGrounding(draft, sourcesText);
 }
 
-/**
- * Drop footnote entries never cited in the text (and their Works Cited
- * lines), then renumber the rest sequentially. Dangling markers with no
- * footnote entry are removed from the text. Only deletes tokens, never
- * prose. Returns the dropped footnote ids.
- */
 export function pruneOrphanFootnotes(draft: EssayDraft): number[] {
   // First rescue the alternate marker format, if that's all there is.
   normalizeMarkerFormat(draft);

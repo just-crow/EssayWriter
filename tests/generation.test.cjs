@@ -99,6 +99,55 @@ test("close evidence paraphrases repair to exact text without accepting unrelate
   assert.match(verifyEvidence(invented, [{ id: 1, url }], map)[0], /not found/);
 });
 
+test("selective source usage: only cited sources are kept, unused sources are pruned without error", () => {
+  const url1 = "https://example.org/source-1";
+  const url2 = "https://example.org/source-2";
+  const url3 = "https://example.org/source-3";
+  const map = sourcesTextMap([
+    { url: url1, content: "First verified passage with necessary detail." },
+    { url: url2, content: "Second verified passage with necessary detail." },
+    { url: url3, content: "Third verified passage with necessary detail." },
+  ]);
+  const d = DraftSchema.parse({
+    title: "Selective Essay",
+    introduction: ["Intro statement.[^1]"],
+    sections: [{ heading: "Body", paragraphs: ["Second point.[^3]"] }],
+    conclusion: ["Conclusion statement.[^1]"],
+    footnotes: [
+      { id: 1, title: "Source 1", url: url1, accessed: "26 Sep 2026" },
+      { id: 2, title: "Source 2 (Unused)", url: url2, accessed: "26 Sep 2026" },
+      { id: 3, title: "Source 3", url: url3, accessed: "26 Sep 2026" },
+    ],
+    evidence: [
+      { paragraph: 0, source: 1, quote: "First verified passage with necessary detail." },
+      { paragraph: 1, source: 3, quote: "Third verified passage with necessary detail." },
+      { paragraph: 2, source: 1, quote: "First verified passage with necessary detail." },
+    ],
+  });
+  prepareDraft(d, map);
+  assert.equal(d.worksCited.length, 2);
+  assert.ok(!d.worksCited.some((w) => w.includes("Source 2")));
+  assert.deepEqual(verifyEvidence(d.evidence, d.footnotes, map), []);
+});
+
+test("cross-source repair and ellipsis-truncated quotes resolve to verbatim source sentences", () => {
+  const urlA = "https://example.org/alpha";
+  const urlB = "https://example.org/beta";
+  const passageB = "Continuous monitoring through quizzes, drag-and-drop exercises, and symbolic manipulation supports learning.";
+  const map = sourcesTextMap([
+    { url: urlA, content: "Unrelated text about weather patterns and climate." },
+    { url: urlB, content: passageB },
+  ]);
+  const evidence = [{ paragraph: 0, source: 1, quote: "continuous monitoring through quizzes, drag-and-drop exercises, and symbolic man..." }];
+  const footnotes = [
+    { id: 1, url: urlA, title: "Source A" },
+    { id: 2, url: urlB, title: "Source B" },
+  ];
+  const count = repairEvidenceQuotes(evidence, footnotes, map, ["Monitoring students."]);
+  assert.equal(count, 1);
+  assert.equal(evidence[0].quote, passageB);
+});
+
 test("citation and JSON failures retry with actionable correction feedback", async () => {
   const requests = [];
   const responses = [JSON.stringify(draft({ evidence: [] })), '{"title":"broken', JSON.stringify(draft())];
