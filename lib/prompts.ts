@@ -35,6 +35,7 @@ export const DRAFT_SYSTEM = `
 ${GLOBAL_STYLE_RULES}
 
 STAGE 3, DRAFT. Write the full essay from the approved outline and the approved source texts below.
+RAG DISCIPLINE (mandatory): the source texts are the ONLY admissible evidence. Every factual sentence must satisfy one of three conditions: (a) it carries a [^n] marker pointing at a source whose text supports it, (b) it is plain common knowledge, or (c) it follows logically from a previous sentence. Writing any fact that appears in none of the source texts, in common knowledge, or in prior reasoning is a defect — when in doubt, cut the sentence or cite it.
 The sources carry full page text in their "content" field. Every factual claim must come from those texts, from common knowledge, or from logical conclusions from text already given. When a source has empty content, rely only on its verified metadata plus common knowledge.
 Paragraph text uses footnote markers like [^1], [^2] at the end of sentences that need them. Every marker MUST have a matching entry in "footnotes".
 MANDATORY: every footnote id 1..N MUST appear at least once as [^id] somewhere in introduction, sections, or conclusion. A footnote entry with no matching in-text marker is a defect. Do not list a source you never cite.
@@ -47,10 +48,12 @@ Return ONLY valid JSON with this shape:
   "sections": [ { "heading": "...", "paragraphs": ["...", "..."] } ],
   "conclusion": ["..."],
   "footnotes": [ { "id": 1, "author": "...", "title": "...", "publisher": "...", "year": "...", "url": "https://...", "accessed": "24 Sept. 2026" } ],
+  "evidence": [ { "paragraph": 0, "source": 1, "quote": "verbatim 12+ character span copied exactly from that source's page text" } ],
   "worksCited": ["Author Last, First. Title. Publisher, Year. URL. Accessed ..."],
   "coverage": [ { "item": "...", "met": true, "location": "Section ..." } ]
 }
 Rules: black Times New Roman logic (server formats it), no em dash, no semicolon, Works Cited alphabetical and deduplicated, every footnote and Works Cited entry carries URL plus access date, no archive.org.
+EVIDENCE (mandatory): "paragraph" counts 0-based over introduction paragraphs, then section paragraphs in order, then conclusion paragraphs. Include at least one evidence item per body (section) paragraph, each "quote" copied character-for-character from that source's page text (12+ characters). A server checks every quote verbatim against the source text — invented or altered quotes fail the whole draft.
 If the instruction sheet is empty, write to the topic using standard academic conventions.
 `.trim();
 
@@ -60,6 +63,8 @@ ${GLOBAL_STYLE_RULES}
 You revise an existing essay. The user gives an instruction (fix a paragraph, add analysis, shorten, adjust tone, satisfy a strand).
 Keep everything else stable. Keep all existing footnotes unless the claim changed. Add new footnotes for new claims.
 Preserve every existing [^n] marker in the text. MANDATORY: every footnote id must appear at least once as [^id] in the text; a footnote entry with no matching marker is a defect.
+RAG DISCIPLINE: write only what the collected texts support — every factual sentence is cited, common knowledge, or follows from prior text. Never state facts from outside the given sources.
+EVIDENCE: include "evidence" like the draft shape: {paragraph (0-based over introduction, then section paragraphs in order, then conclusion), source (footnote id), quote (verbatim 12+ chars from that source's page text)}. Every rewritten or new section paragraph needs at least one entry with a verifiable quote. Paragraphs you leave byte-identical need nothing new. A server checks every quote verbatim — invented or altered quotes fail the whole revision.
 Any paragraph you rewrite or add must be fully developed (5+ sentences with evidence and analysis), never a one-liner.
 Return ONLY valid JSON in the same DRAFT shape: title, introduction, sections, conclusion, footnotes, worksCited, coverage.
 `.trim();
@@ -94,8 +99,9 @@ export function draftUserPrompt(input: {
       0
     );
     if (points > 0) {
-      const paras = Math.max(4, Math.round(input.wordTarget / 90));
-      budget = `\nThe outline lists ${points} bullet points as raw material (cover them all, in any order, merged freely) and the word target is ${input.wordTarget} words: organize the essay into roughly ${paras} fully developed paragraphs. You may add any relevant material from the sources beyond the outline.`;
+      const lo = Math.max(4, Math.floor(input.wordTarget / 150));
+      const hi = Math.ceil(input.wordTarget / 60);
+      budget = `\nThe outline lists ${points} bullet points as raw material (cover them all, in any order, merged freely) and the word target is ${input.wordTarget} words: organize the essay into roughly ${lo}–${hi} fully developed paragraphs. You may add any relevant material from the sources beyond the outline.`;
     }
   } catch {
     // keep default

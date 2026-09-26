@@ -1,4 +1,5 @@
 import type { EssayDraft, EssayStructure } from "./essay-types";
+import { normalizeUrl } from "./search";
 
 /** All checkable draft text in one place (body, headings, bibliography,
  * footnote contents). */
@@ -19,13 +20,228 @@ function draftText(d: EssayDraft): string {
  * checklist of one-liners, not developed writing. */
 export const MIN_AVG_PARAGRAPH_WORDS = 40;
 
+/** Minimum share of body sentences carrying a footnote marker. Below this
+ * the essay states too much without citing. Common-knowledge and transition
+ * sentences legitimately lack markers, hence well under 1. */
+export const MIN_CITED_SENTENCE_SHARE = 0.5;
+
+/** Abbreviations whose periods must not split sentences. */
+const ABBREVIATIONS = [
+  "e.g", "i.e", "etc", "Dr", "Mr", "Mrs", "Ms", "St", "vs", "approx",
+  "No", "Fig", "fig", "al", "Dept", "Univ", "Rep", "Sen", "Gov", "Prof",
+];
+
+/** Split text into sentences without breaking on common abbreviations.
+ * Footnote markers stay attached to their sentence: "end.[^1] Next" splits
+ * into ["end.[^1]", "Next"] so cited sentences are counted on their own.
+ * (Placeholder is a unicode escape in source so no editor encoding can
+ * mangle it into a real punctuation mark.) */
+export function splitSentences(text: string): string[] {
+  const PH = "";
+  let t = ` ${text} `;
+  for (const ab of ABBREVIATIONS) {
+    const re = new RegExp(`\\b${ab}\\.`, "g");
+    // Replace EVERY dot inside the match ("e.g" keeps an interior dot),
+    // so no abbreviation fragment can ever split a sentence.
+    t = t.replace(re, () => ab.split(".").join(PH));
+  }
+  const out: string[] = [];
+  const re = /[^.!?]+(?:[.!?]+(?:\s*\[\^\d+\])*)?/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null) {
+    const s = m[0].split(PH).join(".").trim();
+    if (s.length > 0) out.push(s);
+  }
+  return out;
+}
+
+/** Share of body (sections) sentences carrying at least one [^n] marker. */
+export function citedSentenceShare(draft: EssayDraft): { share: number; cited: number; total: number } {
+  const sentences = draft.sections.flatMap((s) => s.paragraphs.flatMap(splitSentences));
+  const total = sentences.length;
+  if (total === 0) return { share: 0, cited: 0, total: 0 };
+  const cited = sentences.filter((s) => /\[\^\d+\]/.test(s)).length;
+  return { share: cited / total, cited, total };
+}
+
+/** Normalize for quote matching: case, whitespace, and curly quotes. */
+function normQuote(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export interface EvidenceItem {
+  paragraph: number;
+  source: number;
+  quote: string;
+}
+
+/**
+ * Verify every evidence quote is a verbatim span of its source's text.
+ * `sourcesText` maps normalized URL -> full page text (or snippet fallback).
+ * Returns human-readable failures (empty = all verified). Pure function.
+ */
+export function verifyEvidence(
+  evidence: EvidenceItem[],
+  footnotes: Array<{ id: number; url?: string }>,
+  sourcesText: Map<string, string>
+): string[] {
+  const failures: string[] = [];
+  const byId = new Map(footnotes.map((f) => [f.id, f]));
+  for (const e of evidence) {
+    const fn = byId.get(e.source);
+    if (!fn) {
+      failures.push(`evidence cites unknown footnote ${e.source}`);
+      continue;
+    }
+    const text = sourcesText.get(normalizeUrl(fn.url || "")) ?? "";
+    const quote = normQuote(e.quote || "");
+    if (quote.length < 12) {
+      failures.push(`evidence for source ${e.source} is too short to verify`);
+      continue;
+    }
+    if (!text || !normQuote(text).includes(quote)) {
+      failures.push(
+        `quote for source ${e.source} not found in its page text: “${e.quote.slice(0, 80)}...”`
+      );
+    }
+  }
+  return failures;
+}
+
+/** Body-paragraph indexes present in the draft (intro + sections + conclusion). */
+export function bodyParagraphCount(draft: EssayDraft): number {
+  return draft.introduction.length + draft.sections.flatMap((s) => s.paragraphs).length + draft.conclusion.length;
+}
+
+/** Normalize paragraph text for byte-identical comparison. */
+export function normPara(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Build a lookup of normalized source URL -> page text for verification. */
+export function sourcesTextMap(items: Array<{ url?: string; content?: string }>): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const s of items) {
+    const k = normalizeUrl(s.url || "");
+    if (k && !m.has(k)) m.set(k, s.content || "");
+  }
+  return m;
+}
+
+export interface GroundingOpts {
+  /** Minimum cited-sentence share (default MIN_CITED_SENTENCE_SHARE). */
+  minShare?: number;
+  /** Base essay's share: refined text must not regress below min(threshold, base). */
+  baseShare?: number;
+  /** In refine, paragraphs with no marker above this id carry no new claims. */
+  newOnlyAfterId?: number;
+  /** Normalized base paragraphs (refine): byte-identical ones need no new evidence. */
+  baseParagraphs?: Set<string>;
+  /** Draft-only: cap on section-paragraph count. Forces merging into
+   * developed paragraphs instead of spraying one-liners. */
+  maxBodyParas?: number;
+  /** Base essay's average body-paragraph length (refine): refined text must
+   * not regress below min(MIN_AVG_PARAGRAPH_WORDS, base). */
+  baseAvg?: number;
+}
+
+/** Average words per section (body) paragraph. */
+export function avgBodyParaWords(draft: EssayDraft): number {
+  const paras = draft.sections.flatMap((s) => s.paragraphs);
+  if (paras.length === 0) return 0;
+  const words = paras
+    .join(" ")
+    .split(/\s+/)
+    .filter(Boolean).length;
+  return words / paras.length;
+}
+
+/**
+ * RAG grounding gate. Throws a retryable, human-readable error when:
+ * - cited-sentence share falls below threshold (regressions allowed only
+ *   down to the base essay's own share, never below the floor), or
+ * - a body paragraph that makes new claims lacks verifiable evidence, or
+ * - any evidence quote isn't a verbatim span of its source's text.
+ */
+export function assertGrounding(
+  draft: EssayDraft,
+  sourcesText: Map<string, string>,
+  opts?: GroundingOpts
+): void {
+  const minShare = opts?.minShare ?? MIN_CITED_SENTENCE_SHARE;
+  const threshold =
+    opts?.baseShare !== undefined ? Math.min(minShare, opts.baseShare) : minShare;
+  const cov = citedSentenceShare(draft);
+  if (cov.total > 0 && cov.share < threshold - 1e-9) {
+    throw new Error(
+      `Only ${cov.cited}/${cov.total} sentences carry citations (need ${Math.round(threshold * 100)}%). Ground every factual sentence in a source. Try again.`
+    );
+  }
+
+  const avg = avgBodyParaWords(draft);
+  if (avg > 0) {
+    const avgFloor =
+      opts?.baseAvg !== undefined
+        ? Math.min(MIN_AVG_PARAGRAPH_WORDS, opts.baseAvg)
+        : MIN_AVG_PARAGRAPH_WORDS;
+    if (avg < avgFloor - 1e-9) {
+      throw new Error(
+        `Body paragraphs average ${Math.round(avg)} words (need ${Math.round(avgFloor)}). Develop each paragraph fully instead of one-liners. Try again.`
+      );
+    }
+  }
+
+  const bodyCount = draft.sections.flatMap((s) => s.paragraphs).length;
+  if (opts?.maxBodyParas !== undefined && bodyCount > opts.maxBodyParas) {
+    throw new Error(
+      `Too many thin body paragraphs (${bodyCount}, need ${opts.maxBodyParas} or fewer). Merge related points into full developed paragraphs. Try again.`
+    );
+  }
+
+  const introLen = draft.introduction.length;
+  const secBlocks = draft.sections.flatMap((s) => s.paragraphs);
+  const evByPara = new Map<number, EvidenceItem[]>();
+  for (const e of draft.evidence ?? []) {
+    if (!evByPara.has(e.paragraph)) evByPara.set(e.paragraph, []);
+    evByPara.get(e.paragraph)!.push(e);
+  }
+  const missing: number[] = [];
+  secBlocks.forEach((para, i) => {
+    const gi = introLen + i;
+    if (opts?.baseParagraphs?.has(normPara(para))) return; // untouched old text
+    if (opts?.newOnlyAfterId !== undefined) {
+      const ids = [...para.matchAll(/\[\^(\d+)\]/g)].map((m) => Number(m[1]));
+      if (ids.length > 0 && ids.every((id) => id <= (opts.newOnlyAfterId as number))) return;
+      if (ids.length === 0) return; // no claims needing new evidence
+    }
+    const items = evByPara.get(gi) ?? [];
+    if (items.length === 0) missing.push(gi);
+  });
+  if (missing.length > 0) {
+    throw new Error(
+      `Paragraphs missing verifiable evidence (indexes ${missing.slice(0, 6).join(", ")}). ` +
+        `Anchor each body paragraph with a verbatim quote from its source. Try again.`
+    );
+  }
+
+  const fails = verifyEvidence(draft.evidence ?? [], draft.footnotes, sourcesText);
+  if (fails.length > 0) {
+    throw new Error(`Unverifiable evidence — ${fails.slice(0, 2).join(" ")} Try again.`);
+  }
+}
+
 /** Reject placeholder-empty drafts (all-default schemas would accept them).
- * Also rejects checklist-style drafts whose body paragraphs average below
- * MIN_AVG_PARAGRAPH_WORDS words — each bullet must be a developed paragraph.
  * Throws a friendly, retryable error.
  * Note: em dash / semicolon leftovers do NOT fail here on purpose. The
  * prompt tells the model to avoid them and validateDraft still flags them
- * in the UI, but a stray one must never discard a whole essay. */
+ * in the UI, but a stray one must never discard a whole essay.
+ * Depth and grounding are enforced by assertGrounding (routes call it
+ * right after this), never by rejection here. */
 export function assertDraftUsable(d: EssayDraft): void {
   if (
     !d.title ||
@@ -35,18 +251,6 @@ export function assertDraftUsable(d: EssayDraft): void {
     d.footnotes.length === 0
   ) {
     throw new Error("The model returned an empty essay. Try again.");
-  }
-  const bodyParas = d.sections.flatMap((s) => s.paragraphs);
-  if (bodyParas.length > 0) {
-    const words = bodyParas
-      .join(" ")
-      .split(/\s+/)
-      .filter(Boolean).length;
-    if (words / bodyParas.length < MIN_AVG_PARAGRAPH_WORDS) {
-      throw new Error(
-        "The essay paragraphs came back too thin (one-liners instead of developed paragraphs). Try again."
-      );
-    }
   }
 }
 

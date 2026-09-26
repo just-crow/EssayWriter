@@ -2,9 +2,17 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { completeJson, nimChatLong } from "@/lib/nim";
 import { DRAFT_SYSTEM, draftUserPrompt } from "@/lib/prompts";
-import { DraftSchema } from "@/lib/essay-types";
+import { DraftSchema, SourceItemSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, assertDraftUsable, pruneOrphanFootnotes, expandFootnoteUses, rebuildWorksCited } from "@/lib/validate";
+import {
+  validateDraft,
+  assertDraftUsable,
+  assertGrounding,
+  sourcesTextMap,
+  pruneOrphanFootnotes,
+  expandFootnoteUses,
+  rebuildWorksCited,
+} from "@/lib/validate";
 import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
 
@@ -24,6 +32,24 @@ const Body = z.object({
 export async function POST(req: Request) {
   try {
     const body = Body.parse(await req.json());
+    // Source texts for grounding verification (quote checks run against these).
+    let sourceItems: Array<{ url?: string; content?: string }> = [];
+    try {
+      sourceItems = z.array(SourceItemSchema).parse(JSON.parse(body.sourcesJson));
+    } catch {
+      sourceItems = [];
+    }
+    const sourcesText = sourcesTextMap(sourceItems);
+    // Paragraph-count cap so bullets merge into developed paragraphs instead
+    // of spraying one-liners. Never below the outline's own section count.
+    let outlineSections = 0;
+    try {
+      const s = JSON.parse(body.structureJson) as { sections?: unknown[] };
+      if (Array.isArray(s.sections)) outlineSections = s.sections.length;
+    } catch {
+      // keep default
+    }
+    const maxBodyParas = Math.max(outlineSections, Math.ceil(body.wordTarget / 60));
     const draft = await completeJson(
       {
         system: DRAFT_SYSTEM,
@@ -31,7 +57,10 @@ export async function POST(req: Request) {
         temperature: 0.6,
         maxTokens: 12000,
         schema: DraftSchema,
-        validate: assertDraftUsable,
+        validate: (d) => {
+          assertDraftUsable(d);
+          assertGrounding(d, sourcesText, { maxBodyParas });
+        },
         // Long output: disable chain-of-thought so the token budget goes
         // to the essay instead of 40k+ chars of reasoning.
         thinking: false,

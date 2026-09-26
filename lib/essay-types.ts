@@ -49,6 +49,15 @@ export const DraftSectionSchema = z.object({
   paragraphs: z.array(z.string()),
 });
 
+export const EvidenceSchema = z.object({
+  /** 0-based index over introduction + section paragraphs + conclusion. */
+  paragraph: z.number().int().min(0),
+  /** Footnote id the quote is taken from. */
+  source: z.number().int().min(1),
+  /** Verbatim span (12+ chars) from that source's page text. */
+  quote: z.string().min(1),
+});
+
 export const DraftSchema = z.object({
   title: z.string().default("Untitled Essay"),
   introduction: z.array(z.string()).default([]),
@@ -56,6 +65,8 @@ export const DraftSchema = z.object({
   conclusion: z.array(z.string()).default([]),
   footnotes: z.array(DraftFootnoteSchema).default([]),
   worksCited: z.array(z.string()).default([]),
+  /** Per-paragraph verbatim evidence anchors, verified server-side. */
+  evidence: z.array(EvidenceSchema).default([]),
   coverage: z
     .array(
       z.object({

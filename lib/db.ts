@@ -564,6 +564,21 @@ export const prisma = {
       }
       return { count: deleted };
     },
+
+    async findMany(args: { where: { projectId: string } }): Promise<SourceRecord[]> {
+      const projectId = args.where.projectId;
+      try {
+        const { data, error } = await supabase.from("Source").select("*").eq("projectId", projectId);
+        if (!error && data) {
+          const rows = (data as Record<string, unknown>[]).map(formatSource);
+          for (const r of rows) memoryDb.sources.set(r.id, r);
+          return rows;
+        }
+      } catch {
+        // fallback
+      }
+      return Array.from(memoryDb.sources.values()).filter((s) => s.projectId === projectId);
+    },
   },
 
   chatMessage: {
