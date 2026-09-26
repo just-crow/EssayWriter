@@ -15,7 +15,13 @@ function draftText(d: EssayDraft): string {
   ].join("\n");
 }
 
+/** Minimum average words per body paragraph. Below this the essay is a
+ * checklist of one-liners, not developed writing. */
+export const MIN_AVG_PARAGRAPH_WORDS = 40;
+
 /** Reject placeholder-empty drafts (all-default schemas would accept them).
+ * Also rejects checklist-style drafts whose body paragraphs average below
+ * MIN_AVG_PARAGRAPH_WORDS words — each bullet must be a developed paragraph.
  * Throws a friendly, retryable error.
  * Note: em dash / semicolon leftovers do NOT fail here on purpose. The
  * prompt tells the model to avoid them and validateDraft still flags them
@@ -29,6 +35,18 @@ export function assertDraftUsable(d: EssayDraft): void {
     d.footnotes.length === 0
   ) {
     throw new Error("The model returned an empty essay. Try again.");
+  }
+  const bodyParas = d.sections.flatMap((s) => s.paragraphs);
+  if (bodyParas.length > 0) {
+    const words = bodyParas
+      .join(" ")
+      .split(/\s+/)
+      .filter(Boolean).length;
+    if (words / bodyParas.length < MIN_AVG_PARAGRAPH_WORDS) {
+      throw new Error(
+        "The essay paragraphs came back too thin (one-liners instead of developed paragraphs). Try again."
+      );
+    }
   }
 }
 

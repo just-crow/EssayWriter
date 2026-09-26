@@ -38,6 +38,7 @@ STAGE 3, DRAFT. Write the full essay from the approved outline and the approved 
 The sources carry full page text in their "content" field. Every factual claim must come from those texts, from common knowledge, or from logical conclusions from text already given. When a source has empty content, rely only on its verified metadata plus common knowledge.
 Paragraph text uses footnote markers like [^1], [^2] at the end of sentences that need them. Every marker MUST have a matching entry in "footnotes".
 MANDATORY: every footnote id 1..N MUST appear at least once as [^id] somewhere in introduction, sections, or conclusion. A footnote entry with no matching in-text marker is a defect. Do not list a source you never cite.
+PARAGRAPH DEPTH (mandatory): every outline bullet point becomes one FULL paragraph of at least 5 sentences. Never write one-sentence paragraphs (except a rare single transition line). Develop each paragraph: open with the point as a topic sentence, support it with cited evidence from the sources, analyze what the evidence means for the thesis and the mapped criterion, then close the paragraph. A paragraph that merely states its point in one or two sentences is a defect, even if every strand is nominally covered. Checklist coverage never excuses thin paragraphs.
 Return ONLY valid JSON with this shape:
 {
   "title": "...",
@@ -58,6 +59,7 @@ ${GLOBAL_STYLE_RULES}
 You revise an existing essay. The user gives an instruction (fix a paragraph, add analysis, shorten, adjust tone, satisfy a strand).
 Keep everything else stable. Keep all existing footnotes unless the claim changed. Add new footnotes for new claims.
 Preserve every existing [^n] marker in the text. MANDATORY: every footnote id must appear at least once as [^id] in the text; a footnote entry with no matching marker is a defect.
+Any paragraph you rewrite or add must be fully developed (5+ sentences with evidence and analysis), never a one-liner.
 Return ONLY valid JSON in the same DRAFT shape: title, introduction, sections, conclusion, footnotes, worksCited, coverage.
 `.trim();
 
@@ -78,5 +80,23 @@ export function draftUserPrompt(input: {
   structureJson: string;
   sourcesJson: string;
 }): string {
-  return `Topic: ${input.topic}\nWord target: ${input.wordTarget} (stay within 10 percent)\nInstruction sheet:\n${input.instructionText}\nExtra instructions:\n${input.extraInstructions}\nApproved structure:\n${input.structureJson}\nApproved source texts (each has title, URL, and page text in "content"; use ONLY these plus common knowledge plus conclusions from earlier text):\n${input.sourcesJson}\n\nWrite the draft JSON now.`;
+  // Concrete per-bullet budget so "cover every strand" can't collapse into
+  // one-liners: the model gets an explicit words-per-paragraph number.
+  let budget = "";
+  try {
+    const s = JSON.parse(input.structureJson) as {
+      sections?: Array<{ paragraphs?: unknown[] }>;
+    };
+    const points = (s.sections ?? []).reduce(
+      (n, sec) => n + (sec.paragraphs ?? []).length,
+      0
+    );
+    if (points > 0) {
+      const per = Math.max(40, Math.round(input.wordTarget / points));
+      budget = `\nThe outline has ${points} bullet points and the word target is ${input.wordTarget} words: write about ${per} words per bullet point, each as a fully developed paragraph.`;
+    }
+  } catch {
+    // keep default
+  }
+  return `Topic: ${input.topic}\nWord target: ${input.wordTarget} (stay within 10 percent)\nInstruction sheet:\n${input.instructionText}\nExtra instructions:\n${input.extraInstructions}\nApproved structure:\n${input.structureJson}\nApproved source texts (each has title, URL, and page text in "content"; use ONLY these plus common knowledge plus conclusions from earlier text):\n${input.sourcesJson}${budget}\n\nWrite the draft JSON now. As you write each paragraph, end every factual sentence with its [^n] footnote marker right away. When finished, verify every footnote id appears in the text.`;
 }
