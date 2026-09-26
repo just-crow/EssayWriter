@@ -286,11 +286,12 @@ export default function PreviewPanel({
       {/* Refine */}
       <section aria-labelledby="refine-heading" className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
         <h2 id="refine-heading" className="mb-2 text-base font-bold text-stone-900">
-          Revise
+          Keep prompting
         </h2>
         <RefineChat
           projectId={projectId}
           versionId={entry?.id ?? null}
+          version={entry?.version ?? null}
           disabled={!entry}
           onRefined={onRefined}
         />

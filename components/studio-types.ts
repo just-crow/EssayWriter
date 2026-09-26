@@ -26,6 +26,8 @@ export interface DraftResult {
   issues: ValidationIssue[];
   summary: string;
   downloadUrl: string;
+  /** Refine-only: freshly fetched sources cited (or citable) in this revision. */
+  newSources?: SourceItem[];
 }
 
 /** One selectable entry in the preview version dropdown. */

@@ -6,6 +6,7 @@ import type { DraftResult } from "./studio-types";
 interface RefineChatProps {
   projectId: string | null;
   versionId: string | null;
+  version: number | null;
   disabled: boolean;
   onRefined: (result: DraftResult) => void;
 }
@@ -15,7 +16,7 @@ interface ChatLine {
   text: string;
 }
 
-export default function RefineChat({ projectId, versionId, disabled, onRefined }: RefineChatProps) {
+export default function RefineChat({ projectId, versionId, version, disabled, onRefined }: RefineChatProps) {
   const [instruction, setInstruction] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +79,7 @@ export default function RefineChat({ projectId, versionId, disabled, onRefined }
       ) : null}
 
       <label htmlFor="refine-input" className="mb-1 block text-sm font-semibold text-stone-900">
-        Refine draft
+        Refine draft{version ? ` (revising v${version})` : ""}
       </label>
       <textarea
         id="refine-input"
@@ -87,14 +88,14 @@ export default function RefineChat({ projectId, versionId, disabled, onRefined }
         rows={3}
         disabled={disabled || busy}
         placeholder={
-          disabled ? "Your draft will appear above — then ask for changes here…" : "e.g. Soften the tone of paragraph two…"
+          disabled ? "Your draft will appear above — then ask for changes here…" : "e.g. Add a paragraph on X — new sources are fetched automatically…"
         }
         aria-describedby="refine-help"
         className="w-full resize-y rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm leading-6 text-stone-900 shadow-sm transition placeholder:text-stone-400 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-500"
       />
-      <p id="refine-help" className="mt-1 text-xs leading-5 text-stone-600">
-        Each revision saves a new version.
-      </p>
+        <p id="refine-help" className="mt-1 text-xs leading-5 text-stone-600">
+          Each revision saves a new version. Ask for new content freely — fresh sources are gathered when needed.
+        </p>
       {error ? (
         <p role="alert" className="mt-1 text-xs font-medium text-red-800">
           {error}

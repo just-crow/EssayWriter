@@ -303,6 +303,21 @@ export default function StudioPage() {
     setProjectId(result.projectId);
     setVersions((prev) => [...prev.filter((v) => v.id !== entry.id), entry]);
     setSelectedVersionId(entry.id);
+    // Merge freshly fetched follow-up sources into the sidebar list.
+    if (result.newSources && result.newSources.length > 0) {
+      setSources((prev) => {
+        const seen = new Set(prev.map((s) => (s.url || "").trim().toLowerCase()));
+        const fresh = result.newSources!.filter((s) => {
+          const key = (s.url || "").trim().toLowerCase();
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+      });
+      // Extended list needs a fresh approval before any re-draft uses it.
+      setSourcesApproved(false);
+    }
   }
 
   function openHistoryProject(id: string) {
