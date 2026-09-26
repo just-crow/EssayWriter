@@ -1,6 +1,7 @@
 "use client";
 
 import type { EssayStructure, SourceItem, ValidationIssue } from "./studio-types";
+import { buildCriteriaMap, criteriaForSource } from "./criteriaMap";
 
 interface CoverageItem {
   item: string;
@@ -272,6 +273,23 @@ export default function PipelinePanel(props: PipelinePanelProps) {
                       <span className="font-semibold text-emerald-900">Supports:</span> {s.supports}
                     </p>
                   ) : null}
+                  {(() => {
+                    const c = criteriaForSource(s, structure);
+                    if (c.general || c.criteria.length === 0) return null;
+                    return (
+                      <p className="mt-1.5 flex flex-wrap gap-1.5">
+                        {c.criteria.map((name) => (
+                          <span
+                            key={name}
+                            title={c.strands.length > 0 ? c.strands.join(", ") : name}
+                            className="rounded-full bg-emerald-800 px-2.5 py-0.5 text-[11px] font-bold text-white"
+                          >
+                            {name}
+                          </span>
+                        ))}
+                      </p>
+                    );
+                  })()}
                   {s.url ? (
                     <a
                       href={s.url}
@@ -306,6 +324,54 @@ export default function PipelinePanel(props: PipelinePanelProps) {
           />
         )}
       </section>
+
+      {/* Criteria map */}
+      {structure ? (
+        <section aria-labelledby="criteria-heading" className={cardClass}>
+          <h2 id="criteria-heading" className="mb-1 text-base font-bold text-stone-900">
+            Criteria map
+          </h2>
+          <p className="mb-3 text-xs leading-5 text-stone-600">
+            Which criteria each outline section serves, and how many gathered sources back each one.
+          </p>
+          {(() => {
+            const rows = buildCriteriaMap(structure, sources);
+            if (rows.length === 0) {
+              return (
+                <p className="rounded-lg border border-dashed border-stone-300 bg-stone-50 px-4 py-4 text-center text-xs leading-5 text-stone-600">
+                  No criteria tagged yet — they appear here once the outline maps points to criteria.
+                </p>
+              );
+            }
+            return (
+              <ul className="flex flex-col gap-2.5">
+                {rows.map((r) => (
+                  <li key={r.name} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                    <p className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-emerald-800 px-2.5 py-0.5 text-xs font-bold text-white">
+                        {r.name}
+                      </span>
+                      <span className="text-xs font-semibold text-stone-600">
+                        {r.sourceIndexes.length} source{r.sourceIndexes.length === 1 ? "" : "s"}
+                      </span>
+                    </p>
+                    {r.strands.length > 0 ? (
+                      <p className="mt-1 text-xs leading-5 text-stone-600">
+                        Strands: {r.strands.join(", ")}
+                      </p>
+                    ) : null}
+                    {r.sections.length > 0 ? (
+                      <p className="mt-0.5 text-xs leading-5 text-stone-700">
+                        <span className="font-semibold">Sections:</span> {r.sections.join(" · ")}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            );
+          })()}
+        </section>
+      ) : null}
 
       {/* Validation */}
       <section aria-labelledby="validation-heading" className={cardClass}>
