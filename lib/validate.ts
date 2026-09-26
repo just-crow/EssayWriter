@@ -111,6 +111,34 @@ export function expandFootnoteUses(draft: EssayDraft): void {
   draft.footnotes = expanded;
 }
 
+/**
+ * Rebuild Works Cited deterministically from the footnote entries:
+ * dedupe by URL, format one MLA-ish line per source, sort alphabetically.
+ * The model sometimes returns empty strings here; deriving from footnotes
+ * (which are verified present) guarantees a non-empty, consistent list.
+ * Mutates the draft.
+ */
+export function rebuildWorksCited(draft: EssayDraft): void {
+  const seen = new Set<string>();
+  const entries: string[] = [];
+  for (const f of draft.footnotes) {
+    const key = (f.url || "").trim().toLowerCase() || `${f.author}|${f.title}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const head = f.author
+      ? `${f.author}. “${f.title}.”`
+      : f.title
+        ? `“${f.title}.”`
+        : "Untitled.";
+    const pub = [f.publisher, f.year].filter(Boolean).join(", ");
+    entries.push(
+      `${head}${pub ? ` ${pub}.` : ""}${f.url ? ` ${f.url}.` : ""}${f.accessed ? ` Accessed ${f.accessed}.` : ""}`
+    );
+  }
+  entries.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  draft.worksCited = entries;
+}
+
 export function validateDraft(draft: EssayDraft): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const allText = draftText(draft);

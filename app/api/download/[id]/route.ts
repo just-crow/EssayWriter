@@ -5,7 +5,7 @@ import path from "path";
 import { prisma } from "@/lib/db";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx } from "@/lib/docx-build";
-import { pruneOrphanFootnotes, expandFootnoteUses } from "@/lib/validate";
+import { pruneOrphanFootnotes, expandFootnoteUses, rebuildWorksCited } from "@/lib/validate";
 
 export const runtime = "nodejs";
 
@@ -35,6 +35,7 @@ export async function GET(
     const draft = DraftSchema.parse(JSON.parse(record.essayJson));
     pruneOrphanFootnotes(draft);
     expandFootnoteUses(draft);
+    rebuildWorksCited(draft);
     if (draft.footnotes.length > 0) {
       const buf = await buildDocx(draft);
       return serve(new Uint8Array(buf), record.title, record.version);

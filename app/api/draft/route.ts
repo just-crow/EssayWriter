@@ -4,7 +4,7 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { DRAFT_SYSTEM, draftUserPrompt } from "@/lib/prompts";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, assertDraftUsable, pruneOrphanFootnotes, expandFootnoteUses } from "@/lib/validate";
+import { validateDraft, assertDraftUsable, pruneOrphanFootnotes, expandFootnoteUses, rebuildWorksCited } from "@/lib/validate";
 import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
 
@@ -40,8 +40,10 @@ export async function POST(req: Request) {
     );
     // Repair, don't reject: drop uncited entries, then give every citation
     // occurrence its own footnote entry (Word corrupts on shared ids).
+    // Works Cited is rebuilt from footnotes so it can never come back empty.
     pruneOrphanFootnotes(draft);
     expandFootnoteUses(draft);
+    rebuildWorksCited(draft);
     if (draft.footnotes.length === 0) {
       throw new Error("The essay came back without usable citations. Try again.");
     }

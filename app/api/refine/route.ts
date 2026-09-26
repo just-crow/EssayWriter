@@ -4,7 +4,7 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, assertDraftUsable, pruneOrphanFootnotes, expandFootnoteUses } from "@/lib/validate";
+import { validateDraft, assertDraftUsable, pruneOrphanFootnotes, expandFootnoteUses, rebuildWorksCited } from "@/lib/validate";
 import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
 
@@ -49,6 +49,7 @@ export async function POST(req: Request) {
     );
     pruneOrphanFootnotes(draft);
     expandFootnoteUses(draft);
+    rebuildWorksCited(draft);
     if (draft.footnotes.length === 0) {
       throw new Error("The revision came back without usable citations. Try again.");
     }
