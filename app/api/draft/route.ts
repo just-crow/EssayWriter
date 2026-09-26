@@ -47,6 +47,9 @@ export async function POST(req: Request) {
         temperature: 0.6,
         maxTokens: 12000,
         schema: DraftSchema,
+        // Cooler retry: verbatim quotes and strict shape need discipline,
+        // not creativity.
+        retryTempDelta: -0.3,
         validate: (d) => {
           assertDraftUsable(d);
           assertGrounding(d, sourcesText);

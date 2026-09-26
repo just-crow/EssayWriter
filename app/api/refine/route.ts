@@ -4,7 +4,7 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, assertDraftUsable, assertGrounding, normPara, sourcesTextMap, pruneOrphanFootnotes, expandFootnoteUses, rebuildWorksCited } from "@/lib/validate";
+import { validateDraft, assertDraftUsable, assertGrounding, sourcesTextMap, pruneOrphanFootnotes, expandFootnoteUses, rebuildWorksCited } from "@/lib/validate";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
 import type { SourceItem } from "@/lib/essay-types";
 import { saveDocxFile } from "@/lib/docx-store";
@@ -103,23 +103,9 @@ export async function POST(req: Request) {
     }
 
     // Grounding context for the revision: texts of all project sources
-    // plus the freshly fetched ones, and the base essay's paragraphs
-    // (untouched old text needs no new evidence).
+    // plus the freshly fetched ones.
     const dbSources = await prisma.source.findMany({ where: { projectId: body.projectId } });
     const sourcesText = sourcesTextMap([...dbSources, ...newSources]);
-    let baseParagraphs: Set<string> | undefined;
-    try {
-      const baseDraft = DraftSchema.parse(JSON.parse(base.essayJson));
-      baseParagraphs = new Set(
-        [
-          ...baseDraft.introduction,
-          ...baseDraft.sections.flatMap((s) => s.paragraphs),
-          ...baseDraft.conclusion,
-        ].map(normPara)
-      );
-    } catch {
-      // fall through without baseline
-    }
 
     const draft = await completeJson(
       {
@@ -128,9 +114,10 @@ export async function POST(req: Request) {
         temperature: 0.6,
         maxTokens: 12000,
         schema: DraftSchema,
+        retryTempDelta: -0.3,
         validate: (d) => {
           assertDraftUsable(d);
-          assertGrounding(d, sourcesText, { newOnlyAfterId: maxFnId, baseParagraphs });
+          assertGrounding(d, sourcesText);
         },
         thinking: false,
       },

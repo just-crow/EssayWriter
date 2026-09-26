@@ -57,10 +57,16 @@ export function citedSentenceShare(draft: EssayDraft): { share: number; cited: n
   return { share: cited / total, cited, total };
 }
 
-/** Normalize for quote matching: case, whitespace, and curly quotes. */
+/** Normalize for quote matching: case, whitespace, curly quotes, and the
+ * HTML entities extractors commonly leave behind (&amp; vs &). */
 function normQuote(s: string): string {
   return s
     .toLowerCase()
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
     .replace(/\s+/g, " ")
@@ -126,52 +132,18 @@ export function sourcesTextMap(items: Array<{ url?: string; content?: string }>)
   return m;
 }
 
-export interface GroundingOpts {
-  /** In refine, paragraphs with no marker above this id carry no new claims. */
-  newOnlyAfterId?: number;
-  /** Normalized base paragraphs (refine): byte-identical ones need no new evidence. */
-  baseParagraphs?: Set<string>;
-}
-
 /**
- * RAG grounding gate. Throws a retryable, human-readable error when:
- * - a body paragraph that makes new claims lacks verifiable evidence, or
- * - any evidence quote isn't a verbatim span of its source's text.
+ * RAG grounding gate. Throws a retryable, human-readable error only when
+ * an evidence quote isn't a verbatim span of its source's text (fabricated
+ * evidence is never acceptable). Missing per-paragraph evidence does NOT
+ * fail here — it is reported as a soft warning by validateDraft instead.
  * Deliberately no per-sentence citation ratio and no paragraph shape rules:
- * the model decides bullet counts and paragraph lengths itself. Sourcing is
- * enforced per paragraph through verifiable evidence, not percentages.
+ * the model decides bullet counts and paragraph lengths itself.
  */
 export function assertGrounding(
   draft: EssayDraft,
-  sourcesText: Map<string, string>,
-  opts?: GroundingOpts
+  sourcesText: Map<string, string>
 ): void {
-  const introLen = draft.introduction.length;
-  const secBlocks = draft.sections.flatMap((s) => s.paragraphs);
-  const evByPara = new Map<number, EvidenceItem[]>();
-  for (const e of draft.evidence ?? []) {
-    if (!evByPara.has(e.paragraph)) evByPara.set(e.paragraph, []);
-    evByPara.get(e.paragraph)!.push(e);
-  }
-  const missing: number[] = [];
-  secBlocks.forEach((para, i) => {
-    const gi = introLen + i;
-    if (opts?.baseParagraphs?.has(normPara(para))) return; // untouched old text
-    if (opts?.newOnlyAfterId !== undefined) {
-      const ids = [...para.matchAll(/\[\^(\d+)\]/g)].map((m) => Number(m[1]));
-      if (ids.length > 0 && ids.every((id) => id <= (opts.newOnlyAfterId as number))) return;
-      if (ids.length === 0) return; // no claims needing new evidence
-    }
-    const items = evByPara.get(gi) ?? [];
-    if (items.length === 0) missing.push(gi);
-  });
-  if (missing.length > 0) {
-    throw new Error(
-      `Paragraphs missing verifiable evidence (indexes ${missing.slice(0, 6).join(", ")}). ` +
-        `Anchor each body paragraph with a verbatim quote from its source. Try again.`
-    );
-  }
-
   const fails = verifyEvidence(draft.evidence ?? [], draft.footnotes, sourcesText);
   if (fails.length > 0) {
     throw new Error(`Unverifiable evidence — ${fails.slice(0, 2).join(" ")} Try again.`);
@@ -345,6 +317,24 @@ export function validateDraft(draft: EssayDraft): ValidationIssue[] {
       issues.push({
         code: "FOOTNOTE_ORPHAN",
         detail: `Footnote ${fn.id} is never cited in the text — its marker is missing.`,
+      });
+    }
+  }
+
+  // Soft visibility (never blocking): body paragraphs without an anchored
+  // quote rely on markers/common knowledge alone.
+  {
+    const introLen = draft.introduction.length;
+    const secCount = draft.sections.flatMap((s) => s.paragraphs).length;
+    const withEv = new Set((draft.evidence ?? []).map((e) => e.paragraph));
+    let bare = 0;
+    for (let i = 0; i < secCount; i++) {
+      if (!withEv.has(introLen + i)) bare++;
+    }
+    if (bare > 0) {
+      issues.push({
+        code: "EVIDENCE_MISSING",
+        detail: `${bare} body paragraph${bare === 1 ? "" : "s"} ha${bare === 1 ? "s" : "ve"} no anchored source quote — sourcing there rests on markers alone.`,
       });
     }
   }
