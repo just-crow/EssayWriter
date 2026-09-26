@@ -491,6 +491,26 @@ export default function StudioPage() {
             );
             setStructureEdited(true);
           }}
+          onEditPointMeta={(si, pi, field, v) => {
+            setStructure((s) =>
+              s
+                ? {
+                    ...s,
+                    sections: s.sections.map((sec, i) =>
+                      i === si
+                        ? {
+                            ...sec,
+                            paragraphs: sec.paragraphs.map((p, j) =>
+                              j === pi ? { ...p, [field]: v } : p
+                            ),
+                          }
+                        : sec,
+                    ),
+                  }
+                : s,
+            );
+            setStructureEdited(true);
+          }}
           sources={sources}
           liveSearchUsed={liveSearchUsed}
           liveHits={liveHits}

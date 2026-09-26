@@ -19,6 +19,7 @@ interface PipelinePanelProps {
   onEditThesis: (v: string) => void;
   onEditSectionHeading: (si: number, v: string) => void;
   onEditPoint: (si: number, pi: number, v: string) => void;
+  onEditPointMeta: (si: number, pi: number, field: "criterion" | "strand", v: string) => void;
   sources: SourceItem[];
   liveSearchUsed: boolean | null;
   liveHits: number;
@@ -72,6 +73,7 @@ export default function PipelinePanel(props: PipelinePanelProps) {
     onEditThesis,
     onEditSectionHeading,
     onEditPoint,
+    onEditPointMeta,
     sources,
     liveSearchUsed,
     liveHits,
@@ -157,12 +159,40 @@ export default function PipelinePanel(props: PipelinePanelProps) {
                             ) : null}
                           </>
                         ) : (
-                          <input
-                            aria-label={`Edit point ${pi + 1} in section ${si + 1}`}
-                            value={p.point}
-                            onChange={(e) => onEditPoint(si, pi, e.target.value)}
-                            className="w-full rounded-md border border-stone-300 bg-white px-2 py-1 text-sm text-stone-900 shadow-sm focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20"
-                          />
+                          <div className="flex flex-col gap-1.5">
+                            <input
+                              aria-label={`Edit point ${pi + 1} in section ${si + 1}`}
+                              value={p.point}
+                              onChange={(e) => onEditPoint(si, pi, e.target.value)}
+                              className="w-full rounded-md border border-stone-300 bg-white px-2 py-1 text-sm text-stone-900 shadow-sm transition focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20"
+                            />
+                            <div className="flex flex-col gap-1.5 sm:flex-row">
+                              <label className="flex flex-1 items-center gap-1.5">
+                                <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-stone-500">
+                                  Criterion
+                                </span>
+                                <input
+                                  aria-label={`Edit criterion for point ${pi + 1} in section ${si + 1}`}
+                                  value={p.criterion || ""}
+                                  onChange={(e) => onEditPointMeta(si, pi, "criterion", e.target.value)}
+                                  placeholder="e.g. Criterion B"
+                                  className="w-full rounded-md border border-stone-300 bg-white px-2 py-1 text-xs text-stone-900 shadow-sm transition focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20"
+                                />
+                              </label>
+                              <label className="flex flex-1 items-center gap-1.5">
+                                <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-stone-500">
+                                  Strand
+                                </span>
+                                <input
+                                  aria-label={`Edit strand for point ${pi + 1} in section ${si + 1}`}
+                                  value={p.strand || ""}
+                                  onChange={(e) => onEditPointMeta(si, pi, "strand", e.target.value)}
+                                  placeholder="e.g. strand ii"
+                                  className="w-full rounded-md border border-stone-300 bg-white px-2 py-1 text-xs text-stone-900 shadow-sm transition focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20"
+                                />
+                              </label>
+                            </div>
+                          </div>
                         )}
                       </li>
                     ))}
