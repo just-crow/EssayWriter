@@ -7,6 +7,7 @@ import { buildDocx, countWords } from "@/lib/docx-build";
 import {
   validateDraft,
   prepareDraft,
+  pruneUnverifiedEvidence,
   sourcesTextMap,
   splitSentences,
   consolidateSectionParagraphs,
@@ -53,7 +54,21 @@ export async function POST(req: Request) {
         // not creativity.
         retryTempDelta: -0.3,
         validate: async (d) => {
-          prepareDraft(d, sourcesText);
+          try {
+            prepareDraft(d, sourcesText);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes("Unverifiable evidence")) {
+              const pruned = pruneUnverifiedEvidence(d, sourcesText);
+              if (pruned > 0) {
+                prepareDraft(d, sourcesText);
+              } else {
+                throw err;
+              }
+            } else {
+              throw err;
+            }
+          }
           const audit = await auditAndAlignGrounding(d, sourceItems);
           if (body.wordTarget >= 400) {
             consolidateSectionParagraphs(d);

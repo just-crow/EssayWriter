@@ -59,10 +59,24 @@ export function citedSentenceShare(draft: EssayDraft): { share: number; cited: n
   return { share: cited / total, cited, total };
 }
 
+export function cleanRawQuote(s: string): string {
+  if (!s) return "";
+  return s
+    .replace(/!\[.*?\](?:\([^\)]*\))?/g, "")
+    .replace(/\[([^\]]+)\](?:\([^\)]*\))?/g, "$1")
+    .replace(/\]\([a-zA-Z0-9_+.~#?&=/%:-\s]*/g, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[—–]/g, "-")
+    .replace(/(\.{3}|…)$/, "")
+    .replace(/^["'`“”‘’\s]+|["'`“”‘’\s]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** Normalize for quote matching: case, whitespace, curly quotes, and the
  * HTML entities extractors commonly leave behind (&amp; vs &). */
 export function normQuote(s: string): string {
-  return s
+  return cleanRawQuote(s)
     .toLowerCase()
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
@@ -164,6 +178,41 @@ export function assertGrounding(
   }
 }
 
+/**
+ * Remove unverified or out-of-bounds evidence items from a draft.
+ * Returns the count of pruned items.
+ */
+export function pruneUnverifiedEvidence(
+  draft: EssayDraft,
+  sourcesText: Map<string, string>
+): number {
+  if (!draft.evidence || draft.evidence.length === 0) return 0;
+  const byId = new Map(draft.footnotes.map((f) => [f.id, f]));
+  const count = bodyParagraphCount(draft);
+  const initialLen = draft.evidence.length;
+  draft.evidence = draft.evidence.filter((e) => {
+    if (e.paragraph >= count) return false;
+    const fn = byId.get(e.source);
+    if (!fn) return false;
+    const text = sourcesText.get(normalizeUrl(fn.url || "")) ?? "";
+    if (!text) return false;
+    const cleaned = cleanRawQuote(e.quote || "");
+    const quote = normQuote(cleaned);
+    if (quote.length < 12) return false;
+    if (normQuote(text).includes(quote)) {
+      e.quote = cleaned;
+      return true;
+    }
+    const cand = findCandidateInText(text, cleaned);
+    if (cand) {
+      e.quote = cand;
+      return true;
+    }
+    return false;
+  });
+  return initialLen - draft.evidence.length;
+}
+
 /** Reject placeholder-empty drafts (all-default schemas would accept them).
  * Throws a friendly, retryable error.
  * Note: em dash / semicolon leftovers do NOT fail here on purpose. The
@@ -224,10 +273,7 @@ function wordSet(s: string): Set<string> {
 
 export function findCandidateInText(srcText: string, rawQuote: string): string | null {
   if (!srcText) return null;
-  const cleanQuote = rawQuote
-    .replace(/(\.{3}|…)$/, "")
-    .replace(/^["'`“”‘’\s]+|["'`“”‘’\s]+$/g, "")
-    .trim();
+  const cleanQuote = cleanRawQuote(rawQuote);
   if (cleanQuote.length < 12) return null;
 
   const normT = normQuote(srcText);

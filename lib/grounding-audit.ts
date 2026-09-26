@@ -8,6 +8,7 @@ import {
   findCandidateInText,
   normQuote,
   pruneOrphanFootnotes,
+  pruneUnverifiedEvidence,
   rebuildWorksCited,
   sourcesTextMap,
   splitSentences,
@@ -227,7 +228,12 @@ export async function auditAndAlignGrounding(
       pruneOrphanFootnotes(draft);
       expandFootnoteUses(draft);
       rebuildWorksCited(draft);
-      assertGrounding(draft, textMap);
+      try {
+        assertGrounding(draft, textMap);
+      } catch {
+        pruneUnverifiedEvidence(draft, textMap);
+        assertGrounding(draft, textMap);
+      }
       return { removed };
     } catch {
       // Rebuilding had issues; restore pre-audit verified state
@@ -240,6 +246,11 @@ export async function auditAndAlignGrounding(
     }
   }
 
-  assertGrounding(draft, textMap);
+  try {
+    assertGrounding(draft, textMap);
+  } catch {
+    pruneUnverifiedEvidence(draft, textMap);
+    assertGrounding(draft, textMap);
+  }
   return { removed };
 }

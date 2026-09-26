@@ -92,10 +92,14 @@ export async function runSourcesPipeline(
   reportStage?.("Fetching full page texts…");
   const texts = await extractPages(parsed.sources.map((s) => s.url));
   const snippets = new Map(shortlist.map((w) => [normalizeUrl(w.url), w.snippet]));
-  const sources = parsed.sources.map((s) => ({
+  let sources = parsed.sources.map((s) => ({
     ...s,
-    content: texts.get(normalizeUrl(s.url || "")) || snippets.get(normalizeUrl(s.url || "")) || "",
+    content: (texts.get(normalizeUrl(s.url || "")) || snippets.get(normalizeUrl(s.url || "")) || "").trim(),
   }));
+  const substantive = sources.filter((s) => s.content.length >= 80);
+  if (substantive.length >= MIN_VERIFIED) {
+    sources = substantive;
+  }
 
   if (input.projectId) {
     reportStage?.("Saving sources…");

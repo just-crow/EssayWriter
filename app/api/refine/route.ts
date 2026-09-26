@@ -4,7 +4,7 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, prepareDraft, sourcesTextMap } from "@/lib/validate";
+import { validateDraft, prepareDraft, pruneUnverifiedEvidence, sourcesTextMap } from "@/lib/validate";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
 import type { SourceItem } from "@/lib/essay-types";
 import { saveDocxFile } from "@/lib/docx-store";
@@ -119,7 +119,21 @@ export async function POST(req: Request) {
         parseTries: 3,
         retryTempDelta: -0.3,
         validate: async (d) => {
-          prepareDraft(d, sourcesText);
+          try {
+            prepareDraft(d, sourcesText);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes("Unverifiable evidence")) {
+              const pruned = pruneUnverifiedEvidence(d, sourcesText);
+              if (pruned > 0) {
+                prepareDraft(d, sourcesText);
+              } else {
+                throw err;
+              }
+            } else {
+              throw err;
+            }
+          }
           const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources]);
           const removed = audit.removed.length > 0
             ? ` The source audit removed these unsupported claims; replace them only with directly supported statements:\n${audit.removed.slice(0, 8).join("\n")}`

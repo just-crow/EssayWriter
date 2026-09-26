@@ -86,6 +86,83 @@ export function normalizeUrl(raw: string): string {
   }
 }
 
+const DISALLOWED_DOMAINS = new Set([
+  "archive.org",
+  "facebook.com",
+  "twitter.com",
+  "x.com",
+  "instagram.com",
+  "tiktok.com",
+  "youtube.com",
+  "youtu.be",
+  "vimeo.com",
+  "reddit.com",
+  "quora.com",
+  "pinterest.com",
+  "fiverr.com",
+  "upwork.com",
+  "freelancer.com",
+  "linkedin.com",
+  "medium.com",
+  "substack.com",
+  "tumblr.com",
+  "slideshare.net",
+  "scribd.com",
+  "coursehero.com",
+  "chegg.com",
+  "brainly.com",
+  "quizlet.com",
+  "toptal.com",
+  "guru.com",
+]);
+
+export function isDisallowedUrl(rawUrl: string): boolean {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase().replace(/^www\./, "");
+    for (const d of DISALLOWED_DOMAINS) {
+      if (host === d || host.endsWith(`.${d}`)) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+export function qualityWeight(w: WebSource): number {
+  let score = w.score;
+  const host = (w.publisher || "").toLowerCase();
+  // Academic & Government domains get top priority
+  if (host.endsWith(".edu") || host.endsWith(".gov") || /(^|\.)(ac\.[a-z]{2,}|gov\.[a-z]{2,})$/.test(host)) {
+    score += 0.5;
+  }
+  // Major peer-reviewed and scientific publishers
+  if (
+    /nature\.com|springer\.com|sciencedirect\.com|plos\.org|wiley\.com|frontiersin\.org|cell\.com|thelancet\.com|nejm\.org|bmj\.com|tandfonline\.com|oup\.com|cambridge\.org|jstor\.org|nih\.gov|biorxiv\.org|arxiv\.org|semanticscholar\.org|pubmed|britannica\.com/.test(
+      host
+    )
+  ) {
+    score += 0.4;
+  }
+  return score;
+}
+
+export function sanitizePageMarkdown(raw: string): string {
+  if (!raw) return "";
+  return raw
+    // Strip image tags: ![alt](url) -> ""
+    .replace(/!\[.*?\](?:\([^\)]*\))?/g, "")
+    // Convert markdown links to plain text: [Anchor](url) -> Anchor
+    .replace(/\[([^\]]+)\](?:\([^\)]*\))?/g, "$1")
+    // Clean trailing markdown link remnants like ](https://...
+    .replace(/\]\([a-zA-Z0-9_+.~#?&=/%:-\s]*/g, "")
+    // Strip HTML tags
+    .replace(/<[^>]+>/g, " ")
+    // Clean excessive spaces and newlines
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function oneQuery(
   key: string,
   query: string,
@@ -117,7 +194,7 @@ async function oneQuery(
   for (const r of data.results ?? []) {
     if (!r.url || !r.title) continue;
     if (!normalizeUrl(r.url)) continue;
-    if (r.url.includes("archive.org")) continue;
+    if (isDisallowedUrl(r.url)) continue;
     let publisher = "";
     try {
       publisher = new URL(r.url).hostname.replace(/^www\./, "");
@@ -127,7 +204,7 @@ async function oneQuery(
     out.push({
       title: r.title,
       url: r.url,
-      snippet: (r.content ?? "").slice(0, 600),
+      snippet: sanitizePageMarkdown((r.content ?? "").slice(0, 600)),
       publisher,
       date: r.published_date ?? "",
       score: typeof r.score === "number" ? r.score : 0,
@@ -161,7 +238,7 @@ export async function liveSearch(
     const prev = best.get(n);
     if (!prev || s.score > prev.score) best.set(n, s);
   }
-  return [...best.values()].sort((a, b) => b.score - a.score);
+  return [...best.values()].sort((a, b) => qualityWeight(b) - qualityWeight(a));
 }
 
 /**
@@ -193,7 +270,8 @@ export async function extractPages(urls: string[]): Promise<Map<string, string>>
     };
     for (const r of data.results ?? []) {
       if (!r.url) continue;
-      const text = (r.content || r.raw_content || "").trim().slice(0, MAX_SOURCE_CHARS);
+      const rawText = r.content || r.raw_content || "";
+      const text = sanitizePageMarkdown(rawText).slice(0, MAX_SOURCE_CHARS);
       if (text) out.set(normalizeUrl(r.url), text);
     }
   } catch {
