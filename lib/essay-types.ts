@@ -8,7 +8,8 @@ export const StructureParagraphSchema = z.object({
 
 export const StructureSectionSchema = z.object({
   heading: z.string(),
-  paragraphs: z.array(StructureParagraphSchema),
+  // Multiple bullet points per section are mandatory (never a single line).
+  paragraphs: z.array(StructureParagraphSchema).min(3),
 });
 
 export const StructureSchema = z.object({

@@ -27,6 +27,7 @@ Return ONLY valid JSON with this shape:
   "checklist": ["each IS requirement as one string"]
 }
 Cover every instruction-sheet requirement, every criterion and strand. Map each paragraph to its criterion and strand.
+MANDATORY SHAPE: every section MUST contain at least 3 paragraph-level bullet points, each with its own point, criterion, and strand. Never return a section with a single line or a single point. More points is fine; fewer than 3 is a defect.
 If no instruction sheet or context is given, proceed with the topic alone using standard academic essay conventions and list the assumed requirements in the checklist.
 `.trim();
 
