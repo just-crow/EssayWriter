@@ -179,12 +179,43 @@ export function assertStructureUsable(s: EssayStructure): void {
 export type ValidationIssue = { code: string; detail: string };
 
 /**
+ * The model sometimes writes bare [1] markers instead of the required [^1].
+ * When NO proper [^n] marker exists anywhere in the body, rewrite bare
+ * bracketed numbers that match a real footnote id into [^n] form. Years
+ * ([2020]) can't match: ids are 1-3 digits and must exist in footnotes.
+ * Returns how many markers were converted. Mutates the draft.
+ */
+export function normalizeMarkerFormat(draft: EssayDraft): number {
+  const texts = [
+    ...draft.introduction,
+    ...draft.sections.flatMap((s) => s.paragraphs),
+    ...draft.conclusion,
+  ];
+  if (/\[\^\d+\]/.test(texts.join("\n"))) return 0;
+  const ids = new Set(draft.footnotes.map((f) => f.id));
+  if (ids.size === 0) return 0;
+  let count = 0;
+  const rewrite = (t: string): string =>
+    t.replace(/\[(\d{1,3})\]/g, (m, n: string) => {
+      if (!ids.has(Number(n))) return m;
+      count++;
+      return `[^${Number(n)}]`;
+    });
+  draft.introduction = draft.introduction.map(rewrite);
+  for (const s of draft.sections) s.paragraphs = s.paragraphs.map(rewrite);
+  draft.conclusion = draft.conclusion.map(rewrite);
+  return count;
+}
+
+/**
  * Drop footnote entries never cited in the text (and their Works Cited
  * lines), then renumber the rest sequentially. Dangling markers with no
  * footnote entry are removed from the text. Only deletes tokens, never
  * prose. Returns the dropped footnote ids.
  */
 export function pruneOrphanFootnotes(draft: EssayDraft): number[] {
+  // First rescue the alternate marker format, if that's all there is.
+  normalizeMarkerFormat(draft);
   const defined = new Set(draft.footnotes.map((f) => f.id));
   const bodyText = [
     ...draft.introduction,
