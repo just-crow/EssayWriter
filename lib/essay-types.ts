@@ -8,8 +8,8 @@ export const StructureParagraphSchema = z.object({
 
 export const StructureSectionSchema = z.object({
   heading: z.string(),
-  // Multiple bullet points per section are mandatory (never a single line).
-  paragraphs: z.array(StructureParagraphSchema).min(3),
+  // Bullet count is the model's choice; usually 2 to 4 per section.
+  paragraphs: z.array(StructureParagraphSchema),
 });
 
 export const StructureSchema = z.object({

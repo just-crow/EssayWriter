@@ -16,10 +16,6 @@ function draftText(d: EssayDraft): string {
   ].join("\n");
 }
 
-/** Minimum average words per body paragraph. Below this the essay is a
- * checklist of one-liners, not developed writing. */
-export const MIN_AVG_PARAGRAPH_WORDS = 40;
-
 /** Abbreviations whose periods must not split sentences. */
 const ABBREVIATIONS = [
   "e.g", "i.e", "etc", "Dr", "Mr", "Mrs", "Ms", "St", "vs", "approx",
@@ -135,61 +131,21 @@ export interface GroundingOpts {
   newOnlyAfterId?: number;
   /** Normalized base paragraphs (refine): byte-identical ones need no new evidence. */
   baseParagraphs?: Set<string>;
-  /** Draft-only: cap on section-paragraph count. Forces merging into
-   * developed paragraphs instead of spraying one-liners. */
-  maxBodyParas?: number;
-  /** Base essay's average body-paragraph length (refine): refined text must
-   * not regress below min(MIN_AVG_PARAGRAPH_WORDS, base). */
-  baseAvg?: number;
-}
-
-/** Average words per section (body) paragraph. */
-export function avgBodyParaWords(draft: EssayDraft): number {
-  const paras = draft.sections.flatMap((s) => s.paragraphs);
-  if (paras.length === 0) return 0;
-  const words = paras
-    .join(" ")
-    .split(/\s+/)
-    .filter(Boolean).length;
-  return words / paras.length;
 }
 
 /**
  * RAG grounding gate. Throws a retryable, human-readable error when:
- * - body paragraphs average below the floor (regressions allowed only down
- *   to the base essay's own average, never below the floor), or
- * - the paragraph count exceeds the cap (one-liner spraying), or
  * - a body paragraph that makes new claims lacks verifiable evidence, or
  * - any evidence quote isn't a verbatim span of its source's text.
- * Deliberately no per-sentence citation ratio: common-knowledge and
- * transition sentences legitimately lack markers. Sourcing is enforced per
- * paragraph through verifiable evidence, not percentages.
+ * Deliberately no per-sentence citation ratio and no paragraph shape rules:
+ * the model decides bullet counts and paragraph lengths itself. Sourcing is
+ * enforced per paragraph through verifiable evidence, not percentages.
  */
 export function assertGrounding(
   draft: EssayDraft,
   sourcesText: Map<string, string>,
   opts?: GroundingOpts
 ): void {
-  const avg = avgBodyParaWords(draft);
-  if (avg > 0) {
-    const avgFloor =
-      opts?.baseAvg !== undefined
-        ? Math.min(MIN_AVG_PARAGRAPH_WORDS, opts.baseAvg)
-        : MIN_AVG_PARAGRAPH_WORDS;
-    if (avg < avgFloor - 1e-9) {
-      throw new Error(
-        `Body paragraphs average ${Math.round(avg)} words (need ${Math.round(avgFloor)}). Develop each paragraph fully instead of one-liners. Try again.`
-      );
-    }
-  }
-
-  const bodyCount = draft.sections.flatMap((s) => s.paragraphs).length;
-  if (opts?.maxBodyParas !== undefined && bodyCount > opts.maxBodyParas) {
-    throw new Error(
-      `Too many thin body paragraphs (${bodyCount}, need ${opts.maxBodyParas} or fewer). Merge related points into full developed paragraphs. Try again.`
-    );
-  }
-
   const introLen = draft.introduction.length;
   const secBlocks = draft.sections.flatMap((s) => s.paragraphs);
   const evByPara = new Map<number, EvidenceItem[]>();

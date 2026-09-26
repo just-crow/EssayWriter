@@ -40,16 +40,6 @@ export async function POST(req: Request) {
       sourceItems = [];
     }
     const sourcesText = sourcesTextMap(sourceItems);
-    // Paragraph-count cap so bullets merge into developed paragraphs instead
-    // of spraying one-liners. Never below the outline's own section count.
-    let outlineSections = 0;
-    try {
-      const s = JSON.parse(body.structureJson) as { sections?: unknown[] };
-      if (Array.isArray(s.sections)) outlineSections = s.sections.length;
-    } catch {
-      // keep default
-    }
-    const maxBodyParas = Math.max(outlineSections, Math.ceil(body.wordTarget / 60));
     const draft = await completeJson(
       {
         system: DRAFT_SYSTEM,
@@ -59,7 +49,7 @@ export async function POST(req: Request) {
         schema: DraftSchema,
         validate: (d) => {
           assertDraftUsable(d);
-          assertGrounding(d, sourcesText, { maxBodyParas });
+          assertGrounding(d, sourcesText);
         },
         // Long output: disable chain-of-thought so the token budget goes
         // to the essay instead of 40k+ chars of reasoning.
