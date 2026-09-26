@@ -253,7 +253,9 @@ export async function completeJson<T extends z.ZodTypeAny>(
           ? await generate({ ...params, onAttempt: report(i * perTry) })
         : await generate({
             ...params,
-            user: `${params.user}\n\nThe previous response is included below. Repair it instead of starting over. Preserve valid essay content and change only what is needed to pass validation.\n\nVALIDATION FAILURE:\n${feedback}\n\nPREVIOUS RESPONSE:\n${priorRaw.slice(0, 80_000)}\n\nReturn one complete corrected JSON object with matching [^n] markers, footnotes, and evidence. Escape quotes and newlines inside JSON strings.`,
+            user: feedback.toLowerCase().includes("malformed") || feedback.toLowerCase().includes("json")
+              ? `${params.user}\n\nVALIDATION FAILURE:\n${feedback}\nThe previous output was malformed and could not be parsed as valid JSON. Return strictly valid RFC-8259 JSON matching the schema. Escape every quote inside prose strings (use \\") and ensure all brackets are properly closed.`
+              : `${params.user}\n\nThe previous response is included below. Repair it instead of starting over. Preserve valid essay content and change only what is needed to pass validation.\n\nVALIDATION FAILURE:\n${feedback}\n\nPREVIOUS RESPONSE:\n${priorRaw.slice(0, 80_000)}\n\nReturn one complete corrected JSON object with matching [^n] markers, footnotes, and evidence. Escape quotes and newlines inside JSON strings.`,
             temperature: Math.min(1, Math.max(0.1, (params.temperature ?? 0.6) + i * tempDelta)),
             onAttempt: report(i * perTry),
           });

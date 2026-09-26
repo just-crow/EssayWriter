@@ -9,6 +9,7 @@ import {
   prepareDraft,
   sourcesTextMap,
   splitSentences,
+  consolidateSectionParagraphs,
 } from "@/lib/validate";
 import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
@@ -54,6 +55,9 @@ export async function POST(req: Request) {
         validate: async (d) => {
           prepareDraft(d, sourcesText);
           const audit = await auditAndAlignGrounding(d, sourceItems);
+          if (body.wordTarget >= 400) {
+            consolidateSectionParagraphs(d);
+          }
           const removed = audit.removed.length > 0
             ? ` The source audit removed these unsupported claims; replace them only with claims directly supported by the supplied page text:\n${audit.removed.slice(0, 8).join("\n")}`
             : "";

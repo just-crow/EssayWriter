@@ -61,7 +61,7 @@ export function citedSentenceShare(draft: EssayDraft): { share: number; cited: n
 
 /** Normalize for quote matching: case, whitespace, curly quotes, and the
  * HTML entities extractors commonly leave behind (&amp; vs &). */
-function normQuote(s: string): string {
+export function normQuote(s: string): string {
   return s
     .toLowerCase()
     .replace(/&amp;/g, "&")
@@ -222,6 +222,57 @@ function wordSet(s: string): Set<string> {
   return new Set((normQuote(s).match(/[a-z0-9]+/g) ?? []).filter((word) => word.length > 2 && !STOP_WORDS.has(word)));
 }
 
+export function findCandidateInText(srcText: string, rawQuote: string): string | null {
+  if (!srcText) return null;
+  const cleanQuote = rawQuote
+    .replace(/(\.{3}|…)$/, "")
+    .replace(/^["'`“”‘’\s]+|["'`“”‘’\s]+$/g, "")
+    .trim();
+  if (cleanQuote.length < 12) return null;
+
+  const normT = normQuote(srcText);
+  const candidates = srcText
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.replace(/^[-*#>\s]+/, "").trim())
+    .filter((s) => s.length >= 12 && s.length <= 700);
+
+  // 1. Direct clean quote match
+  if (normT.includes(normQuote(cleanQuote))) {
+    const match = candidates.find((s) => normQuote(s).includes(normQuote(cleanQuote)));
+    if (match) return match;
+  }
+
+  // 2. Subsentence after period (e.g. "health. Delaying..." -> "Delaying...")
+  const subSentence = cleanQuote.replace(/^.+?[.!?]\s+/, "").trim();
+  if (subSentence.length >= 12 && normT.includes(normQuote(subSentence))) {
+    const match = candidates.find((s) => normQuote(s).includes(normQuote(subSentence)));
+    if (match) return match;
+  }
+
+  // 3. Truncated tail (strip last word or two)
+  const prefix = cleanQuote.replace(/\s+\S+(?:\s+\S+)?$/, "").trim();
+  if (prefix.length >= 12 && normT.includes(normQuote(prefix))) {
+    const match = candidates.find((s) => normQuote(s).includes(normQuote(prefix)));
+    if (match) return match;
+  }
+
+  // 4. Subsentence without tail
+  const subPrefix = subSentence.replace(/\s+\S+(?:\s+\S+)?$/, "").trim();
+  if (subPrefix.length >= 12 && normT.includes(normQuote(subPrefix))) {
+    const match = candidates.find((s) => normQuote(s).includes(normQuote(subPrefix)));
+    if (match) return match;
+  }
+
+  // 5. Clean markdown link syntax: [Text](url) -> Text
+  const strippedQuote = cleanQuote.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/[*_#`]/g, "").trim();
+  if (strippedQuote !== cleanQuote && strippedQuote.length >= 12 && normT.includes(normQuote(strippedQuote))) {
+    const match = candidates.find((s) => normQuote(s).includes(normQuote(strippedQuote)));
+    if (match) return match;
+  }
+
+  return null;
+}
+
 /** Replace a close paraphrase in an evidence record with the nearest exact
  * source sentence. Searches the assigned source first, and if ungrounded,
  * checks all other gathered sources for a verifiable match. */
@@ -233,22 +284,18 @@ export function repairEvidenceQuotes(
 ): number {
   const byId = new Map(footnotes.map((f) => [f.id, f]));
   let repaired = 0;
+
   for (const item of evidence) {
     const source = byId.get(item.source);
     const text = sourcesText.get(normalizeUrl(source?.url || "")) || "";
     if (text && normQuote(text).includes(normQuote(item.quote || ""))) continue;
 
-    const cleanQuote = (item.quote || "").replace(/(\.\.\.|…)$/, "").trim();
-    if (text && cleanQuote.length >= 12 && normQuote(text).includes(normQuote(cleanQuote))) {
-      const candidateContaining = text
-        .split(/(?<=[.!?])\s+|\n+/)
-        .map((s) => s.replace(/^[-*#>\s]+/, "").trim())
-        .find((s) => normQuote(s).includes(normQuote(cleanQuote)));
-      if (candidateContaining) {
-        item.quote = candidateContaining;
-        repaired++;
-        continue;
-      }
+    // Check candidate within assigned source text first
+    const directCandidate = findCandidateInText(text, item.quote || "");
+    if (directCandidate) {
+      item.quote = directCandidate;
+      repaired++;
+      continue;
     }
 
     const wanted = wordSet(`${item.quote} ${paragraphs[item.paragraph] || ""}`);
@@ -270,7 +317,7 @@ export function repairEvidenceQuotes(
         const words = wordSet(candidate);
         const overlap = [...wanted].filter((word) => words.has(word)).length;
         const score = overlap / Math.max(1, Math.min(wanted.size, words.size));
-        if (overlap >= 2 && score > bestScore) {
+        if (overlap >= 1 && score > bestScore) {
           best = candidate;
           bestScore = score;
         }
@@ -283,33 +330,174 @@ export function repairEvidenceQuotes(
     // If assigned source has no candidate with score >= 0.1, check across other sources
     if ((!result.best || result.score < 0.1) && sourcesText.size > 0) {
       const assignedNorm = normalizeUrl(source?.url || "");
+      let bestOtherUrl = "";
       for (const [otherUrl, otherText] of sourcesText.entries()) {
         if (!otherText || otherUrl === assignedNorm) continue;
-        if (cleanQuote.length >= 12 && normQuote(otherText).includes(normQuote(cleanQuote))) {
-          const candidateContaining = otherText
-            .split(/(?<=[.!?])\s+|\n+/)
-            .map((s) => s.replace(/^[-*#>\s]+/, "").trim())
-            .find((s) => normQuote(s).includes(normQuote(cleanQuote)));
-          if (candidateContaining) {
-            result = { best: candidateContaining, score: 1.0 };
-            if (source && !text) source.url = otherUrl;
-            break;
-          }
+        const crossCandidate = findCandidateInText(otherText, item.quote || "");
+        if (crossCandidate) {
+          result = { best: crossCandidate, score: 1.0 };
+          bestOtherUrl = otherUrl;
+          break;
         }
         const otherRes = evaluate(otherText);
-        if (otherRes.score > result.score && otherRes.score >= 0.2) {
+        if (otherRes.score > result.score && otherRes.score >= 0.05) {
           result = otherRes;
-          if (source && !text) source.url = otherUrl;
+          bestOtherUrl = otherUrl;
+        }
+      }
+      if (bestOtherUrl && result.best) {
+        const existingFn = footnotes.find((f) => normalizeUrl(f.url || "") === bestOtherUrl);
+        if (existingFn) {
+          const oldSourceId = item.source;
+          item.source = existingFn.id;
+          if (paragraphs[item.paragraph]) {
+            paragraphs[item.paragraph] = paragraphs[item.paragraph].replace(
+              new RegExp(`\\[\\^${oldSourceId}\\]`, "g"),
+              `[^${existingFn.id}]`
+            );
+          }
+        } else if (source) {
+          source.url = bestOtherUrl;
         }
       }
     }
 
-    if (result.best && result.score >= 0.1) {
+    if (result.best && result.score >= 0.05) {
       item.quote = result.best;
       repaired++;
     }
   }
   return repaired;
+}
+
+export function consolidateSectionParagraphs(draft: EssayDraft): void {
+  // 1. Normalize introduction and conclusion to exactly 1 paragraph each
+  const introOldCount = draft.introduction.length;
+  if (draft.introduction.length > 1) {
+    draft.introduction = [draft.introduction.filter(Boolean).join(" ")];
+  }
+  const conclusionOldCount = draft.conclusion.length;
+  if (draft.conclusion.length > 1) {
+    draft.conclusion = [draft.conclusion.filter(Boolean).join(" ")];
+  }
+
+  // 2. Track original paragraph indexes
+  const oldFlat: Array<{ type: "intro" | "sec" | "conclusion"; si?: number; pi?: number; oldIdx: number }> = [];
+  let flatIdx = 0;
+  for (let pi = 0; pi < introOldCount; pi++) {
+    oldFlat.push({ type: "intro", pi, oldIdx: flatIdx++ });
+  }
+  for (let si = 0; si < draft.sections.length; si++) {
+    for (let pi = 0; pi < draft.sections[si].paragraphs.length; pi++) {
+      oldFlat.push({ type: "sec", si, pi, oldIdx: flatIdx++ });
+    }
+  }
+  for (let pi = 0; pi < conclusionOldCount; pi++) {
+    oldFlat.push({ type: "conclusion", pi, oldIdx: flatIdx++ });
+  }
+
+  const oldToNew = new Map<number, number>();
+  for (let pi = 0; pi < introOldCount; pi++) {
+    oldToNew.set(pi, 0);
+  }
+
+  const cleanWords = (text: string) => text.replace(/\[\^\d+\]/g, "").split(/\s+/).filter(Boolean).length;
+  const sentenceCount = (text: string) => splitSentences(text).length;
+
+  let newFlatIdx = 1;
+  for (let si = 0; si < draft.sections.length; si++) {
+    const sec = draft.sections[si];
+    if (sec.paragraphs.length === 0) continue;
+    const consolidated: string[] = [];
+    let current = "";
+    let currentOldIndices: number[] = [];
+
+    for (let pi = 0; pi < sec.paragraphs.length; pi++) {
+      const p = sec.paragraphs[pi].trim();
+      if (!p) continue;
+      const oldItem = oldFlat.find((o) => o.type === "sec" && o.si === si && o.pi === pi);
+      const oldIdx = oldItem ? oldItem.oldIdx : null;
+
+      if (!current) {
+        current = p;
+        if (oldIdx !== null) currentOldIndices.push(oldIdx);
+        continue;
+      }
+
+      const words = cleanWords(current);
+      const sentences = sentenceCount(current);
+
+      if (words < 80 || sentences < 3) {
+        current += ` ${p}`;
+        if (oldIdx !== null) currentOldIndices.push(oldIdx);
+      } else {
+        consolidated.push(current);
+        for (const idx of currentOldIndices) oldToNew.set(idx, newFlatIdx);
+        newFlatIdx++;
+        current = p;
+        currentOldIndices = oldIdx !== null ? [oldIdx] : [];
+      }
+    }
+
+    if (current) {
+      const words = cleanWords(current);
+      const sentences = sentenceCount(current);
+      if ((words < 60 || sentences < 3) && consolidated.length > 0) {
+        consolidated[consolidated.length - 1] += ` ${current}`;
+        for (const idx of currentOldIndices) oldToNew.set(idx, newFlatIdx - 1);
+      } else {
+        consolidated.push(current);
+        for (const idx of currentOldIndices) oldToNew.set(idx, newFlatIdx);
+        newFlatIdx++;
+      }
+    }
+    sec.paragraphs = consolidated;
+  }
+
+  // 3. Check for any remaining shallow section paragraphs across sections
+  for (let si = 0; si < draft.sections.length; si++) {
+    const sec = draft.sections[si];
+    for (let pi = sec.paragraphs.length - 1; pi >= 0; pi--) {
+      const p = sec.paragraphs[pi];
+      if (cleanWords(p) < 60 || sentenceCount(p) < 3) {
+        if (pi > 0) {
+          sec.paragraphs[pi - 1] += ` ${p}`;
+          sec.paragraphs.splice(pi, 1);
+        } else if (si > 0 && draft.sections[si - 1].paragraphs.length > 0) {
+          const prev = draft.sections[si - 1];
+          prev.paragraphs[prev.paragraphs.length - 1] += ` ${p}`;
+          sec.paragraphs.splice(pi, 1);
+        } else if (si + 1 < draft.sections.length && draft.sections[si + 1].paragraphs.length > 0) {
+          const next = draft.sections[si + 1];
+          next.paragraphs[0] = `${p} ${next.paragraphs[0]}`;
+          sec.paragraphs.splice(pi, 1);
+        }
+      }
+    }
+  }
+
+  // Remove empty sections
+  draft.sections = draft.sections.filter((s) => s.paragraphs.length > 0);
+
+  // Recalculate conclusion index
+  const finalSectionCount = draft.sections.flatMap((s) => s.paragraphs).length;
+  const conclusionNewIdx = 1 + finalSectionCount;
+  for (const cItem of oldFlat.filter((o) => o.type === "conclusion")) {
+    oldToNew.set(cItem.oldIdx, conclusionNewIdx);
+  }
+
+  // Remap evidence paragraph indexes and clamp
+  if (draft.evidence) {
+    const totalParas = 1 + finalSectionCount + draft.conclusion.length;
+    for (const e of draft.evidence) {
+      if (oldToNew.has(e.paragraph)) {
+        e.paragraph = oldToNew.get(e.paragraph)!;
+      }
+      if (e.paragraph >= totalParas) {
+        e.paragraph = Math.max(0, totalParas - 1);
+      }
+    }
+  }
 }
 
 /** Run citation repair inside completeJson's validation/retry boundary.
@@ -320,7 +508,24 @@ export function prepareDraft(draft: EssayDraft, sourcesText: Map<string, string>
   const ids = draft.footnotes.map((f) => f.id);
   if (new Set(ids).size !== ids.length) throw new Error("The essay has duplicate footnote IDs. Give each source a distinct ID.");
   normalizeMarkerFormat(draft);
-  const paragraphs = [...draft.introduction, ...draft.sections.flatMap((s) => s.paragraphs), ...draft.conclusion];
+  let paragraphs = [...draft.introduction, ...draft.sections.flatMap((s) => s.paragraphs), ...draft.conclusion];
+  // 1-based paragraph indexing recovery for evidence
+  if (
+    draft.evidence &&
+    draft.evidence.length > 0 &&
+    !draft.evidence.some((e) => e.paragraph === 0) &&
+    draft.evidence.some((e) => e.paragraph >= paragraphs.length)
+  ) {
+    for (const e of draft.evidence) e.paragraph -= 1;
+  }
+  // Clamp single off-by-one boundary (e.g. conclusion index)
+  if (draft.evidence && paragraphs.length > 0) {
+    for (const e of draft.evidence) {
+      if (e.paragraph === paragraphs.length) {
+        e.paragraph = paragraphs.length - 1;
+      }
+    }
+  }
   const defined = new Set(ids);
   for (const text of paragraphs) {
     for (const match of text.matchAll(/\[\^(\d+)\]/g)) {
