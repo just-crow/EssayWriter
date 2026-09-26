@@ -39,8 +39,8 @@ RAG DISCIPLINE (mandatory): the source texts are the ONLY admissible evidence. E
 The sources carry full page text in their "content" field. Every factual claim must come from those texts, from common knowledge, or from logical conclusions from text already given. When a source has empty content, rely only on its verified metadata plus common knowledge.
 Paragraph text uses footnote markers like [^1], [^2] at the end of sentences that need them. Every marker MUST have a matching entry in "footnotes".
 MANDATORY: every footnote id 1..N MUST appear at least once as [^id] somewhere in introduction, sections, or conclusion. A footnote entry with no matching in-text marker is a defect. Do not list a source you never cite.
-PARAGRAPH DEPTH: write FULL developed paragraphs: open with a topic sentence, support it with cited evidence from the sources, analyze what the evidence means for the thesis and the mapped criterion, then close the paragraph. Aim for well-developed paragraphs rather than quick one-sentence statements (a rare single transition line is fine).
-ESSAY SHAPE: each outline SECTION usually becomes 1 to 3 fully developed paragraphs — merge that section's bullets together freely, in any order, plus any relevant source material beyond the outline. Fewer, fuller paragraphs beat many thin ones.
+PARAGRAPH DEPTH: write FULL developed paragraphs of at least 3 sentences and roughly 80 to 160 words: open with a topic sentence, support it with directly cited evidence from the sources, analyze what the evidence means for the thesis and the mapped criterion, then close the paragraph. Never turn individual factual sentences into separate paragraphs.
+ESSAY SHAPE: write exactly one developed introduction paragraph and one developed conclusion paragraph. Each outline SECTION usually becomes 1 to 3 fully developed paragraphs — merge that section's bullets together freely, in any order, plus any relevant source material beyond the outline. Fewer, fuller paragraphs beat many thin ones.
 FREEDOM OF COMPOSITION: the outline bullets are raw material, not a paragraph template. Cover every bullet's point somewhere in the essay. Checklist coverage never excuses thin paragraphs.
 Return ONLY valid JSON with this shape:
 {
@@ -54,7 +54,7 @@ Return ONLY valid JSON with this shape:
   "coverage": [ { "item": "...", "met": true, "location": "Section ..." } ]
 }
 Rules: black Times New Roman logic (server formats it), no em dash, no semicolon, Works Cited alphabetical and deduplicated, every footnote and Works Cited entry carries URL plus access date, no archive.org.
-EVIDENCE (mandatory): "paragraph" counts 0-based over introduction paragraphs, then section paragraphs in order, then conclusion paragraphs. Include at least one evidence item per body (section) paragraph, each "quote" copied character-for-character from that source's page text (12+ characters). A server checks every quote verbatim against the source text — invented or altered quotes fail the whole draft.
+EVIDENCE (mandatory): "paragraph" counts 0-based over introduction paragraphs, then section paragraphs in order, then conclusion paragraphs. Include at least one evidence item for EVERY paragraph, including introduction and conclusion. Each "quote" must be copied character-for-character from that source's page text (12+ characters) and must directly support the material factual claims in that paragraph. Every factual sentence's [^n] marker must point to the same source that supports it. Topic relevance alone is not support. A server checks quotes verbatim and independently audits whether each cited page entails its claim — invented, mismatched, or overstated claims fail the whole draft.
 If the instruction sheet is empty, write to the topic using standard academic conventions.
 `.trim();
 
@@ -67,7 +67,7 @@ Preserve every existing [^n] marker in the text. MANDATORY: every footnote id mu
 RAG DISCIPLINE: write only what the collected texts support — every factual sentence is cited, common knowledge, or follows from prior text. Never state facts from outside the given sources.
 EVIDENCE: include "evidence" like the draft shape: {paragraph (0-based over introduction, then section paragraphs in order, then conclusion), source (footnote id), quote (verbatim 12+ chars from that source's page text)}. Every rewritten or new section paragraph needs at least one entry with a verifiable quote. Paragraphs you leave byte-identical need nothing new. A server checks every quote verbatim — invented or altered quotes fail the whole revision.
 Any paragraph you rewrite or add must be fully developed (5+ sentences with evidence and analysis), never a one-liner.
-Return ONLY valid JSON in the same DRAFT shape: title, introduction, sections, conclusion, footnotes, worksCited, coverage.
+Return ONLY valid JSON in the same DRAFT shape: title, introduction, sections, conclusion, footnotes, evidence, worksCited, coverage.
 `.trim();
 
 export function structureUserPrompt(input: {
@@ -100,12 +100,12 @@ export function draftUserPrompt(input: {
       0
     );
     if (points > 0) {
-      const lo = Math.max(4, Math.floor(input.wordTarget / 150));
-      const hi = Math.ceil(input.wordTarget / 60);
+      const lo = Math.max(4, Math.floor(input.wordTarget / 160));
+      const hi = Math.max(lo, Math.ceil(input.wordTarget / 100));
       budget = `\nThe outline lists ${points} bullet points as raw material (cover them all) and the word target is ${input.wordTarget} words: organize the essay into roughly ${lo}–${hi} fully developed paragraphs, usually 1–3 per outline section with bullets merged. You may add any relevant material from the sources beyond the outline.`;
     }
   } catch {
     // keep default
   }
-  return `Topic: ${input.topic}\nWord target: ${input.wordTarget} (stay within 10 percent)\nInstruction sheet:\n${input.instructionText}\nExtra instructions:\n${input.extraInstructions}\nApproved structure:\n${input.structureJson}\nApproved source texts (each has title, URL, and page text in "content"; use ONLY these plus common knowledge plus conclusions from earlier text):\n${input.sourcesJson}${budget}\n\nWrite the draft JSON now. As you write each paragraph, end every factual sentence with its [^n] footnote marker right away. When finished, verify every footnote id appears in the text, and include one evidence item (paragraph index, source id, verbatim quote) for every body paragraph without exception.`;
+  return `Topic: ${input.topic}\nWord target: ${input.wordTarget} (stay within 10 percent)\nInstruction sheet:\n${input.instructionText}\nExtra instructions:\n${input.extraInstructions}\nApproved structure:\n${input.structureJson}\nApproved source texts (each has title, URL, and page text in "content"; use ONLY these plus common knowledge plus conclusions from earlier text):\n${input.sourcesJson}${budget}\n\nWrite the draft JSON now. As you write each paragraph, end every factual sentence with its [^n] footnote marker right away, using the source whose text directly supports that exact claim. When finished, verify every footnote id appears in the text, and include one evidence item (paragraph index, source id, directly supporting verbatim quote) for every paragraph, including introduction and conclusion, without exception.`;
 }

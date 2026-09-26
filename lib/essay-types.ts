@@ -35,7 +35,7 @@ export const SourceItemSchema = z.object({
 });
 
 export const DraftFootnoteSchema = z.object({
-  id: z.number(),
+  id: z.number().int().min(1),
   author: z.string().default(""),
   title: z.string().default(""),
   publisher: z.string().default(""),

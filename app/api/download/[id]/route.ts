@@ -10,11 +10,14 @@ import { pruneOrphanFootnotes, expandFootnoteUses, rebuildWorksCited } from "@/l
 export const runtime = "nodejs";
 
 function serve(bytes: Uint8Array, title: string, version: number): NextResponse {
+  const filename = `${title || "essay"}-v${version}.docx`;
+  const fallback = filename.replace(/[^a-zA-Z0-9._ -]/g, "_");
+  const encoded = encodeURIComponent(filename).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
   return new NextResponse(new Blob([bytes as BlobPart]), {
     headers: {
       "Content-Type":
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "Content-Disposition": `attachment; filename="${title || "essay"}-v${version}.docx"`,
+      "Content-Disposition": `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`,
       "Content-Length": String(bytes.length),
     },
   });
@@ -47,11 +50,12 @@ export async function GET(
   // Fallback: disk cache (local dev tmpdir, then legacy ./storage).
   const candidates = [
     path.join(os.tmpdir(), "essaywriter-storage", path.basename(record.docxPath)),
-    path.join(/*turbopackIgnore: true*/ process.cwd(), record.docxPath),
+    path.join(process.cwd(), "storage", path.basename(record.docxPath)),
   ];
   for (const abs of candidates) {
     try {
-      const buf = await fs.readFile(abs);
+      // These files are generated at runtime; they must not be traced into builds.
+      const buf = await fs.readFile(/*turbopackIgnore: true*/ abs);
       return serve(new Uint8Array(buf), record.title, record.version);
     } catch {
       // try next location

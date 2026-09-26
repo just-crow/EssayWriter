@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { NIM_BASE_URL, nimClient, withRetry, NIM_TIMEOUT_MS } from "./nim";
+import { nimClient, withRetry, NIM_TIMEOUT_MS } from "./nim";
 
 /**
  * Vision model used to transcribe attached pictures into context text.

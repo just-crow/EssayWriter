@@ -4,11 +4,12 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, assertDraftUsable, assertGrounding, sourcesTextMap, pruneOrphanFootnotes, expandFootnoteUses, rebuildWorksCited } from "@/lib/validate";
+import { validateDraft, prepareDraft, sourcesTextMap } from "@/lib/validate";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
 import type { SourceItem } from "@/lib/essay-types";
 import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
+import { auditAndAlignGrounding } from "@/lib/grounding-audit";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -32,6 +33,7 @@ export async function POST(req: Request) {
           orderBy: { version: "desc" },
         });
     if (!base) return NextResponse.json({ error: "No essay version to refine yet." }, { status: 400 });
+    if (base.projectId !== body.projectId) return NextResponse.json({ error: "This essay version belongs to a different project." }, { status: 400 });
 
     await prisma.chatMessage.create({
       data: { projectId: body.projectId, role: "user", content: body.instruction.slice(0, 10000) },
@@ -41,7 +43,7 @@ export async function POST(req: Request) {
     // so new claims can be cited instead of invented. URLs already cited in
     // the base essay are skipped. Never fails the revision — worst case the
     // model works from existing footnotes plus common knowledge.
-    let citedUrls = new Set<string>();
+    const citedUrls = new Set<string>();
     let maxFnId = 0;
     try {
       const baseDraft = DraftSchema.parse(JSON.parse(base.essayJson));
@@ -110,30 +112,33 @@ export async function POST(req: Request) {
     const draft = await completeJson(
       {
         system: REFINE_SYSTEM,
-        user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\n\nCurrent essay JSON:\n${base.essayJson}\n\nUser revision instruction:\n${body.instruction}\n\n${sourceBlock}\n\nReturn the revised essay JSON now.`,
+        user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\n\nCurrent essay JSON:\n${base.essayJson}\n\nExisting source texts:\n${JSON.stringify(dbSources.filter((s) => citedUrls.has(normalizeUrl(s.url))).map(({ title, url, content }) => ({ title, url, content })))}\n\nUser revision instruction:\n${body.instruction}\n\n${sourceBlock}\n\nReturn the revised essay JSON now.`,
         temperature: 0.6,
-        maxTokens: 12000,
+        maxTokens: Math.min(32768, Math.max(20000, project.wordTarget * 4 + 6000)),
         schema: DraftSchema,
+        parseTries: 3,
         retryTempDelta: -0.3,
-        validate: (d) => {
-          assertDraftUsable(d);
-          assertGrounding(d, sourcesText);
+        validate: async (d) => {
+          prepareDraft(d, sourcesText);
+          const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources]);
+          const removed = audit.removed.length > 0
+            ? ` The source audit removed these unsupported claims; replace them only with directly supported statements:\n${audit.removed.slice(0, 8).join("\n")}`
+            : "";
+          const words = countWords(d);
+          if (Math.abs(words - project.wordTarget) > 400) {
+            throw new Error(`The grounded revision is ${words} words. Keep it within 400 words of the ${project.wordTarget}-word target.${removed}`);
+          }
         },
         thinking: false,
       },
       nimChatLong
     );
-    pruneOrphanFootnotes(draft);
-    expandFootnoteUses(draft);
-    rebuildWorksCited(draft);
-    if (draft.footnotes.length === 0) {
-      throw new Error("The revision came back without usable citations. Try again.");
-    }
     const issues = validateDraft(draft);
     const wordCount = countWords(draft);
     const buffer = await buildDocx(draft);
 
-    const version = base.version + 1;
+    const latest = await prisma.essayVersion.findFirst({ where: { projectId: body.projectId }, orderBy: { version: "desc" } });
+    const version = (latest?.version ?? base.version) + 1;
     const rel = await saveDocxFile(body.projectId, version, buffer);
 
     const summary =
@@ -156,6 +161,7 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({
+      projectId: body.projectId,
       versionId: record.id,
       version,
       draft,

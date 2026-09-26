@@ -28,8 +28,9 @@ export default function DocxPaper({
 }: DocxPaperProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<PreviewStatus>("idle");
-  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [renderResult, setRenderResult] = useState<{ blob: Blob; status: PreviewStatus; error: string | null } | null>(null);
+  const status: PreviewStatus = !blob ? "idle" : renderResult?.blob === blob ? renderResult.status : "loading";
+  const previewError = renderResult?.blob === blob ? renderResult.error : null;
   const [fitMode, setFitMode] = useState(true);
   const [dims, setDims] = useState({ scale: 1, height: 0, width: 0 });
 
@@ -49,14 +50,9 @@ export default function DocxPaper({
 
   useEffect(() => {
     if (!blob) {
-      setStatus("idle");
-      setPreviewError(null);
       return;
     }
     let cancelled = false;
-    setStatus("loading");
-    setPreviewError(null);
-    setDims({ scale: 1, height: 0, width: 0 });
     (async () => {
       try {
         if (blob.size === 0) throw new Error("The preview file came back empty.");
@@ -66,11 +62,13 @@ export default function DocxPaper({
         if (!el) return;
         el.innerHTML = "";
         await renderAsync(blob, el, null, { breakPages: true });
-        if (!cancelled) setStatus("ready");
+        if (!cancelled) {
+          setDims({ scale: 1, height: 0, width: 0 });
+          setRenderResult({ blob, status: "ready", error: null });
+        }
       } catch (err) {
         if (cancelled) return;
-        setStatus("error");
-        setPreviewError(err instanceof Error ? err.message : "Could not render the preview.");
+        setRenderResult({ blob, status: "error", error: err instanceof Error ? err.message : "Could not render the preview." });
       }
     })();
     return () => {
@@ -80,7 +78,8 @@ export default function DocxPaper({
 
   useEffect(() => {
     if (status !== "ready") return;
-    computeScale();
+    const frame = requestAnimationFrame(computeScale);
+    return () => cancelAnimationFrame(frame);
   }, [status, fitMode, computeScale]);
 
   useEffect(() => {

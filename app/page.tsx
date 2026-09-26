@@ -31,14 +31,14 @@ function useElapsed(active: boolean): number {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     if (!active) {
-      setElapsed(0);
       return;
     }
     const start = Date.now();
+    const reset = setTimeout(() => setElapsed(0), 0);
     const id = setInterval(() => setElapsed(Math.round((Date.now() - start) / 1000)), 1000);
-    return () => clearInterval(id);
+    return () => { clearTimeout(reset); clearInterval(id); };
   }, [active]);
-  return elapsed;
+  return active ? elapsed : 0;
 }
 
 export default function StudioPage() {
@@ -81,7 +81,6 @@ export default function StudioPage() {
       const raw = localStorage.getItem("essaywriter:project-ids");
       const ids: string[] = raw ? (JSON.parse(raw) as string[]) : [];
       if (!Array.isArray(ids) || ids.length === 0) {
-        setHistory([]);
         return;
       }
       (async () => {
@@ -95,7 +94,7 @@ export default function StudioPage() {
         }
       })();
     } catch {
-      setHistory([]);
+      // The initial empty history already handles malformed local storage.
     }
   }, []);
 
@@ -196,7 +195,6 @@ export default function StudioPage() {
       inflight.current.sources = false;
       setSourcesBusy(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [structure, topic, projectId, sourcesBusy]);
 
   const draftEssay = useCallback(async () => {

@@ -24,7 +24,10 @@ export async function POST(req: Request) {
       system: STRUCTURE_SYSTEM,
       user: structureUserPrompt(body),
       temperature: 0.5,
-      maxTokens: 4000,
+      maxTokens: 8000,
+      // This endpoint needs the JSON outline, not a long hidden reasoning
+      // trace that can consume the output budget before the object starts.
+      thinking: false,
       schema: StructureSchema,
       validate: assertStructureUsable,
     });

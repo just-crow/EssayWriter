@@ -33,17 +33,20 @@ export default function PreviewPanel({
   draftBusy,
   onRefined,
 }: PreviewPanelProps) {
-  const [blob, setBlob] = useState<Blob | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [loadedDraft, setLoadedDraft] = useState<EssayDraft | null>(null);
+  const [blobResult, setBlobResult] = useState<{ id: string; blob: Blob } | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [draftResult, setDraftResult] = useState<{ id: string; draft: EssayDraft } | null>(null);
 
   const downloadUrl = entry?.downloadUrl ?? null;
   const entryId = entry?.id ?? null;
+  const blob = blobResult?.id === entryId ? blobResult?.blob ?? null : null;
+  const loadedDraft = entry?.draft ?? (draftResult?.id === entryId ? draftResult?.draft ?? null : null);
+  const expanded = entryId !== null && expandedId === entryId;
+  const setExpanded = (open: boolean) => setExpandedId(open ? entryId : null);
 
   // Fetch the .docx blob once per version.
   useEffect(() => {
     if (!entry || !downloadUrl) {
-      setBlob(null);
       return;
     }
     let cancelled = false;
@@ -52,10 +55,10 @@ export default function PreviewPanel({
         const res = await fetch(downloadUrl);
         if (!res.ok) throw new Error(`Preview request failed (${res.status}).`);
         const b = await res.blob();
-        if (!cancelled) setBlob(b.size === 0 ? new Blob() : b);
+        if (!cancelled) setBlobResult({ id: entry.id, blob: b });
       } catch {
         // Empty blob drives DocxPaper into its error/fallback path.
-        if (!cancelled) setBlob(new Blob());
+        if (!cancelled) setBlobResult({ id: entry.id, blob: new Blob() });
       }
     })();
     return () => {
@@ -66,19 +69,16 @@ export default function PreviewPanel({
   // Full draft JSON: present for fresh drafts, fetched for history entries.
   useEffect(() => {
     if (!entry) {
-      setLoadedDraft(null);
       return;
     }
     if (entry.draft) {
-      setLoadedDraft(entry.draft);
       return;
     }
     let cancelled = false;
-    setLoadedDraft(null);
     fetch(`/api/versions/${entry.id}`)
       .then((r) => r.json())
       .then((d) => {
-        if (!cancelled && d.draft && Array.isArray(d.draft.footnotes)) setLoadedDraft(d.draft);
+        if (!cancelled && d.draft && Array.isArray(d.draft.footnotes)) setDraftResult({ id: entry.id, draft: d.draft });
       })
       .catch(() => {});
     return () => {
@@ -90,7 +90,7 @@ export default function PreviewPanel({
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setExpanded(false);
+      if (e.key === "Escape") setExpandedId(null);
     };
     document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -100,11 +100,6 @@ export default function PreviewPanel({
       document.body.style.overflow = prev;
     };
   }, [expanded]);
-
-  // Close the overlay when switching versions.
-  useEffect(() => {
-    setExpanded(false);
-  }, [entryId]);
 
   const progress = entry && wordTarget > 0 ? Math.min(100, Math.round((entry.wordCount / wordTarget) * 100)) : 0;
 

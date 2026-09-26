@@ -79,7 +79,7 @@ export function normalizeUrl(raw: string): string {
       if (/^(utm_|fbclid|gclid|mc_|igsh)/i.test(p)) u.searchParams.delete(p);
     }
     const host = u.hostname.toLowerCase().replace(/^www\./, "");
-    let s = `${host}${u.pathname.replace(/\/+$/, "")}${u.search}`;
+    const s = `${host}${u.pathname.replace(/\/+$/, "")}${u.search}`;
     return s.toLowerCase();
   } catch {
     return "";

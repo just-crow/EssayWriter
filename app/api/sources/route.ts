@@ -99,8 +99,10 @@ export async function runSourcesPipeline(
 
   if (input.projectId) {
     reportStage?.("Saving sources…");
-    await prisma.source.deleteMany({ where: { projectId: input.projectId } });
+    // Older versions still need their source texts for evidence verification.
+    const saved = await prisma.source.findMany({ where: { projectId: input.projectId } });
     for (const s of sources) {
+      if (saved.some((old) => normalizeUrl(old.url) === normalizeUrl(s.url) && old.content === s.content)) continue;
       await prisma.source.create({
         data: {
           projectId: input.projectId,

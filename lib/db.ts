@@ -27,7 +27,7 @@ function offlineStub(): SupabaseClient {
   const handler: ProxyHandler<object> = {
     get: (_t, prop) => {
       if (typeof prop === "symbol" || prop === "then") return undefined;
-      return (..._args: unknown[]) => new Proxy(function () {}, handler);
+      return () => new Proxy(function () {}, handler);
     },
     apply: () => new Proxy(function () {}, handler),
   };
