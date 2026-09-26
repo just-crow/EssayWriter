@@ -9,7 +9,6 @@ import {
   type DraftResult,
   type EssayStructure,
   type HistoryProject,
-  type JobSnapshot,
   type SourceItem,
   type ValidationIssue,
   type VersionEntry,
@@ -26,20 +25,20 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
   return data;
 }
 
-/** Poll a background job until done/error. Resolves with the final snapshot. */
-async function pollJob(jobId: string, onTick?: (j: JobSnapshot) => void): Promise<JobSnapshot> {
-  for (let i = 0; i < 300; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
-    const res = await fetch(`/api/jobs/${jobId}`);
-    const data = (await res.json().catch(() => ({}))) as { job?: JobSnapshot; error?: string };
-    if (!res.ok) throw new Error(data.error || "Job lookup failed.");
-    const job = data.job;
-    if (!job) throw new Error("Job vanished.");
-    onTick?.(job);
-    if (job.status === "done") return job;
-    if (job.status === "error") throw new Error(job.error || "Sources job failed.");
-  }
-  throw new Error("Sources are taking too long. Try again.");
+/** Ticks every second while `active`, returning elapsed whole seconds.
+ * Pure client-side proof of life for long synchronous requests. */
+function useElapsed(active: boolean): number {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!active) {
+      setElapsed(0);
+      return;
+    }
+    const start = Date.now();
+    const id = setInterval(() => setElapsed(Math.round((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return elapsed;
 }
 
 export default function StudioPage() {
@@ -55,7 +54,6 @@ export default function StudioPage() {
   const [structureEdited, setStructureEdited] = useState(false);
   const [outlineApproved, setOutlineApproved] = useState(false);
   const [sources, setSources] = useState<SourceItem[]>([]);
-  const [sourcesJob, setSourcesJob] = useState<JobSnapshot | null>(null);
   const [liveSearchUsed, setLiveSearchUsed] = useState<boolean | null>(null);
   const [liveHits, setLiveHits] = useState(0);
   const [sourcesApproved, setSourcesApproved] = useState(false);
@@ -151,36 +149,18 @@ export default function StudioPage() {
     inflight.current.sources = true;
     setGlobalError(null);
     setSourcesBusy(true);
-    setSourcesJob(null);
     try {
-      const started = await postJSON<
-        { jobId: string } & {
-          sources?: SourceItem[];
-          liveSearchUsed?: boolean;
-          liveHits?: number;
-        }
-      >("/api/sources", {
+      const data = await postJSON<{
+        sources: SourceItem[];
+        liveSearchUsed: boolean;
+        liveHits: number;
+      }>("/api/sources", {
         topic: topic.trim(),
         structureJson: JSON.stringify(structure),
         projectId: projectId ?? undefined,
         needed: 12,
       });
-      if (started.sources) {
-        applySources({
-          sources: started.sources,
-          liveSearchUsed: started.liveSearchUsed ?? true,
-          liveHits: started.liveHits ?? 0,
-        });
-      } else {
-        const job = await pollJob(started.jobId, setSourcesJob);
-        applySources(
-          job.result as unknown as {
-            sources: SourceItem[];
-            liveSearchUsed: boolean;
-            liveHits: number;
-          }
-        );
-      }
+      applySources(data);
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Sources failed.");
     } finally {
@@ -242,36 +222,18 @@ export default function StudioPage() {
       setOutlineApproved(true);
       setOutlineBusy(false);
 
-      // Stage 2: sources (job+poll locally, synchronous on serverless)
+      // Stage 2: sources (synchronous, same everywhere)
       setSourcesBusy(true);
-      setSourcesJob(null);
-      const started = await postJSON<
-        { jobId: string } & {
-          sources?: SourceItem[];
-          liveSearchUsed?: boolean;
-          liveHits?: number;
-        }
-      >("/api/sources", {
+      const found = await postJSON<{
+        sources: SourceItem[];
+        liveSearchUsed: boolean;
+        liveHits: number;
+      }>("/api/sources", {
         topic: topic.trim(),
         structureJson: JSON.stringify(outline.structure),
         projectId: pid,
         needed: 12,
       });
-      const found: { sources: SourceItem[]; liveSearchUsed: boolean; liveHits: number } =
-        started.sources
-          ? {
-              sources: started.sources,
-              liveSearchUsed: started.liveSearchUsed ?? true,
-              liveHits: started.liveHits ?? 0,
-            }
-          : await (async () => {
-              const job = await pollJob(started.jobId as string, setSourcesJob);
-              return job.result as unknown as {
-                sources: SourceItem[];
-                liveSearchUsed: boolean;
-                liveHits: number;
-              };
-            })();
       setSources(found.sources);
       setLiveSearchUsed(found.liveSearchUsed);
       setLiveHits(found.liveHits);
@@ -504,7 +466,7 @@ export default function StudioPage() {
           liveSearchUsed={liveSearchUsed}
           liveHits={liveHits}
           sourcesBusy={sourcesBusy}
-          sourcesJob={sourcesJob}
+          sourcesElapsed={useElapsed(sourcesBusy)}
           sourcesApproved={sourcesApproved}
           onApproveSources={() => setSourcesApproved(true)}
           onReopenSources={() => setSourcesApproved(false)}

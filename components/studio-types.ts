@@ -80,22 +80,3 @@ export function toVersionEntry(result: DraftResult): VersionEntry {
 export function formatWords(n: number): string {
   return n.toLocaleString("en-GB");
 }
-
-/** Snapshot of GET /api/jobs/[id] used while a background stage runs. */
-export interface JobSnapshot {
-  id: string;
-  kind: string;
-  status: "queued" | "running" | "done" | "error";
-  attempt: number;
-  maxAttempts: number;
-  stage: string;
-  startedAt: number;
-  updatedAt: number;
-  elapsedSec: number;
-  result?: {
-    sources: SourceItem[];
-    liveSearchUsed: boolean;
-    liveHits: number;
-  };
-  error?: string;
-}

@@ -1,6 +1,6 @@
 "use client";
 
-import type { EssayStructure, JobSnapshot, SourceItem, ValidationIssue } from "./studio-types";
+import type { EssayStructure, SourceItem, ValidationIssue } from "./studio-types";
 
 interface CoverageItem {
   item: string;
@@ -22,7 +22,7 @@ interface PipelinePanelProps {
   liveSearchUsed: boolean | null;
   liveHits: number;
   sourcesBusy: boolean;
-  sourcesJob: JobSnapshot | null;
+  sourcesElapsed: number;
   sourcesApproved: boolean;
   onApproveSources: () => void;
   onReopenSources: () => void;
@@ -75,7 +75,7 @@ export default function PipelinePanel(props: PipelinePanelProps) {
     liveSearchUsed,
     liveHits,
     sourcesBusy,
-    sourcesJob,
+    sourcesElapsed,
     sourcesApproved,
     onApproveSources,
     onReopenSources,
@@ -249,19 +249,7 @@ export default function PipelinePanel(props: PipelinePanelProps) {
           <div aria-live="polite">
             <Skeleton lines={4} />
             <p className="mt-2 text-xs text-stone-600">
-              {sourcesJob && (sourcesJob.stage || sourcesJob.attempt > 0) ? (
-                <>
-                  {sourcesJob.stage || "Working…"}
-                  {sourcesJob.attempt > 0 ? (
-                    <span className="text-stone-500">
-                      {" "}· attempt {sourcesJob.attempt}/{sourcesJob.maxAttempts}
-                    </span>
-                  ) : null}
-                  <span className="text-stone-500"> · {sourcesJob.elapsedSec}s elapsed</span>
-                </>
-              ) : (
-                "Starting source search…"
-              )}
+              Gathering sources… {sourcesElapsed}s elapsed. No need to click again.
             </p>
           </div>
         ) : sources.length > 0 ? (

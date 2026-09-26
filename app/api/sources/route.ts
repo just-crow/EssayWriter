@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { type SourceItem } from "@/lib/essay-types";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
-import { createJob, runJob } from "@/lib/jobs";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -10,8 +9,6 @@ export const maxDuration = 300;
 
 /** Fewer verified pages than this and the run refuses instead of inventing. */
 const MIN_VERIFIED = 3;
-/** No model call in this stage anymore, so attempts stay at 0. */
-const JOB_TRIES = 1;
 
 const Body = z.object({
   topic: z.string().min(1).max(500),
@@ -126,22 +123,11 @@ export async function runSourcesPipeline(
 export async function POST(req: Request) {
   try {
     const body = Body.parse(await req.json());
-
-    // Serverless (Vercel): background work after the response gets frozen,
-    // so a queued job would never run and the client would poll forever.
-    // Run the pipeline synchronously and return the full result instead.
-    if (process.env.VERCEL) {
-      const result = await runSourcesPipeline(body);
-      return NextResponse.json({ ...result, jobId: null });
-    }
-
-    // Long-lived local server: background job + polling for live progress.
-    const job = await createJob("sources", JOB_TRIES);
-    runJob(job.id, (r) =>
-      runSourcesPipeline(body, (s) => r.stage(s))
-    );
-    // Returns in milliseconds; the client polls GET /api/jobs/[id].
-    return NextResponse.json({ jobId: job.id }, { status: 202 });
+    // One code path everywhere: run the pipeline inside the request and
+    // return the full result. (A previous background-job design broke on
+    // serverless, where work queued after the response never runs.)
+    const result = await runSourcesPipeline(body);
+    return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Sources failed.";
     return NextResponse.json({ error: message }, { status: 400 });
