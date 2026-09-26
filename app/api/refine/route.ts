@@ -4,7 +4,7 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, assertDraftUsable, assertGrounding, citedSentenceShare, avgBodyParaWords, normPara, sourcesTextMap, pruneOrphanFootnotes, expandFootnoteUses, rebuildWorksCited } from "@/lib/validate";
+import { validateDraft, assertDraftUsable, assertGrounding, avgBodyParaWords, normPara, sourcesTextMap, pruneOrphanFootnotes, expandFootnoteUses, rebuildWorksCited } from "@/lib/validate";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
 import type { SourceItem } from "@/lib/essay-types";
 import { saveDocxFile } from "@/lib/docx-store";
@@ -103,17 +103,15 @@ export async function POST(req: Request) {
     }
 
     // Grounding context for the revision: texts of all project sources
-    // plus the freshly fetched ones, and the base essay's own coverage
-    // (refinements must not make grounding worse) and paragraphs (untouched
-    // old text needs no new evidence).
+    // plus the freshly fetched ones, and the base essay's own depth
+    // (refinements must not make paragraphs thinner) and paragraphs
+    // (untouched old text needs no new evidence).
     const dbSources = await prisma.source.findMany({ where: { projectId: body.projectId } });
     const sourcesText = sourcesTextMap([...dbSources, ...newSources]);
-    let baseShare: number | undefined;
     let baseAvg: number | undefined;
     let baseParagraphs: Set<string> | undefined;
     try {
       const baseDraft = DraftSchema.parse(JSON.parse(base.essayJson));
-      baseShare = citedSentenceShare(baseDraft).share;
       baseAvg = avgBodyParaWords(baseDraft);
       baseParagraphs = new Set(
         [
@@ -135,7 +133,7 @@ export async function POST(req: Request) {
         schema: DraftSchema,
         validate: (d) => {
           assertDraftUsable(d);
-          assertGrounding(d, sourcesText, { baseShare, baseAvg, newOnlyAfterId: maxFnId, baseParagraphs });
+          assertGrounding(d, sourcesText, { baseAvg, newOnlyAfterId: maxFnId, baseParagraphs });
         },
         thinking: false,
       },

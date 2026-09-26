@@ -39,8 +39,9 @@ RAG DISCIPLINE (mandatory): the source texts are the ONLY admissible evidence. E
 The sources carry full page text in their "content" field. Every factual claim must come from those texts, from common knowledge, or from logical conclusions from text already given. When a source has empty content, rely only on its verified metadata plus common knowledge.
 Paragraph text uses footnote markers like [^1], [^2] at the end of sentences that need them. Every marker MUST have a matching entry in "footnotes".
 MANDATORY: every footnote id 1..N MUST appear at least once as [^id] somewhere in introduction, sections, or conclusion. A footnote entry with no matching in-text marker is a defect. Do not list a source you never cite.
-PARAGRAPH DEPTH (mandatory): write FULL developed paragraphs of at least 5 sentences each — never one-liners (except a rare single transition line). Develop each paragraph: open with a topic sentence, support it with cited evidence from the sources, analyze what the evidence means for the thesis and the mapped criterion, then close the paragraph.
-FREEDOM OF COMPOSITION (mandatory): the outline bullets are raw material, not a paragraph template. Cover every bullet's point somewhere in the essay, but you are free to reorder them, merge several bullets into one rich paragraph, split one bullet across paragraphs, and add any other relevant material found in the sources — even points the outline never mentions. A paragraph that merely states one bullet in one or two sentences is a defect, even if every strand is nominally covered. Checklist coverage never excuses thin paragraphs.
+PARAGRAPH DEPTH (mandatory): every paragraph is FULL and developed: at least 5 sentences and roughly 80-150 words. Open with a topic sentence, support it with cited evidence from the sources, analyze what the evidence means for the thesis and the mapped criterion, then close the paragraph. Never write one-sentence paragraphs (except a rare single transition line).
+ESSAY SHAPE (mandatory): each outline SECTION becomes 1 to 3 fully developed paragraphs — merge that section's bullets together freely, in any order, plus any relevant source material beyond the outline. Never write one paragraph per bullet; that produces thin checklist writing and is a defect. Fewer, fuller paragraphs always beat many thin ones.
+FREEDOM OF COMPOSITION: the outline bullets are raw material, not a paragraph template. Cover every bullet's point somewhere in the essay. Checklist coverage never excuses thin paragraphs.
 Return ONLY valid JSON with this shape:
 {
   "title": "...",
@@ -101,7 +102,7 @@ export function draftUserPrompt(input: {
     if (points > 0) {
       const lo = Math.max(4, Math.floor(input.wordTarget / 150));
       const hi = Math.ceil(input.wordTarget / 60);
-      budget = `\nThe outline lists ${points} bullet points as raw material (cover them all, in any order, merged freely) and the word target is ${input.wordTarget} words: organize the essay into roughly ${lo}–${hi} fully developed paragraphs. You may add any relevant material from the sources beyond the outline.`;
+      budget = `\nThe outline lists ${points} bullet points as raw material (cover them all) and the word target is ${input.wordTarget} words: organize the essay into roughly ${lo}–${hi} fully developed paragraphs, i.e. 1–3 paragraphs per outline section with bullets merged. You may add any relevant material from the sources beyond the outline.`;
     }
   } catch {
     // keep default

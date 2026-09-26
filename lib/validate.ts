@@ -20,11 +20,6 @@ function draftText(d: EssayDraft): string {
  * checklist of one-liners, not developed writing. */
 export const MIN_AVG_PARAGRAPH_WORDS = 40;
 
-/** Minimum share of body sentences carrying a footnote marker. Below this
- * the essay states too much without citing. Common-knowledge and transition
- * sentences legitimately lack markers, hence well under 1. */
-export const MIN_CITED_SENTENCE_SHARE = 0.5;
-
 /** Abbreviations whose periods must not split sentences. */
 const ABBREVIATIONS = [
   "e.g", "i.e", "etc", "Dr", "Mr", "Mrs", "Ms", "St", "vs", "approx",
@@ -55,7 +50,9 @@ export function splitSentences(text: string): string[] {
   return out;
 }
 
-/** Share of body (sections) sentences carrying at least one [^n] marker. */
+/** Share of body (sections) sentences carrying at least one [^n] marker.
+ * Informational only — never a pass/fail gate, since common-knowledge and
+ * transition sentences legitimately lack markers. */
 export function citedSentenceShare(draft: EssayDraft): { share: number; cited: number; total: number } {
   const sentences = draft.sections.flatMap((s) => s.paragraphs.flatMap(splitSentences));
   const total = sentences.length;
@@ -134,10 +131,6 @@ export function sourcesTextMap(items: Array<{ url?: string; content?: string }>)
 }
 
 export interface GroundingOpts {
-  /** Minimum cited-sentence share (default MIN_CITED_SENTENCE_SHARE). */
-  minShare?: number;
-  /** Base essay's share: refined text must not regress below min(threshold, base). */
-  baseShare?: number;
   /** In refine, paragraphs with no marker above this id carry no new claims. */
   newOnlyAfterId?: number;
   /** Normalized base paragraphs (refine): byte-identical ones need no new evidence. */
@@ -163,26 +156,20 @@ export function avgBodyParaWords(draft: EssayDraft): number {
 
 /**
  * RAG grounding gate. Throws a retryable, human-readable error when:
- * - cited-sentence share falls below threshold (regressions allowed only
- *   down to the base essay's own share, never below the floor), or
+ * - body paragraphs average below the floor (regressions allowed only down
+ *   to the base essay's own average, never below the floor), or
+ * - the paragraph count exceeds the cap (one-liner spraying), or
  * - a body paragraph that makes new claims lacks verifiable evidence, or
  * - any evidence quote isn't a verbatim span of its source's text.
+ * Deliberately no per-sentence citation ratio: common-knowledge and
+ * transition sentences legitimately lack markers. Sourcing is enforced per
+ * paragraph through verifiable evidence, not percentages.
  */
 export function assertGrounding(
   draft: EssayDraft,
   sourcesText: Map<string, string>,
   opts?: GroundingOpts
 ): void {
-  const minShare = opts?.minShare ?? MIN_CITED_SENTENCE_SHARE;
-  const threshold =
-    opts?.baseShare !== undefined ? Math.min(minShare, opts.baseShare) : minShare;
-  const cov = citedSentenceShare(draft);
-  if (cov.total > 0 && cov.share < threshold - 1e-9) {
-    throw new Error(
-      `Only ${cov.cited}/${cov.total} sentences carry citations (need ${Math.round(threshold * 100)}%). Ground every factual sentence in a source. Try again.`
-    );
-  }
-
   const avg = avgBodyParaWords(draft);
   if (avg > 0) {
     const avgFloor =
