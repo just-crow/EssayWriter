@@ -9,6 +9,7 @@ import {
   TextRun,
 } from "docx";
 import type { EssayDraft } from "./essay-types";
+import { expandFootnoteUses } from "./validate";
 
 const FONT = "Times New Roman";
 const BLACK = "000000";
@@ -87,6 +88,10 @@ export function countWords(draft: EssayDraft): number {
 }
 
 export async function buildDocx(draft: EssayDraft): Promise<Buffer> {
+  // Word needs one unique footnote definition per in-text reference.
+  // Expand here too so every caller gets a valid file (idempotent: routes
+  // already expand for JSON consistency, this is the safety net).
+  expandFootnoteUses(draft);
   const footnotes: Record<string, { children: Paragraph[] }> = {};
   for (const fn of draft.footnotes) {
     const line = mlaFootnoteText(fn);

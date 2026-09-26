@@ -71,22 +71,51 @@ export default function StudioPage() {
   const [instructionError, setInstructionError] = useState<string | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
 
-  // History via /api/projects
+  // History via /api/projects, scoped to IDs this browser created.
+  // Stored locally so one visitor never sees another's essays.
   const [history, setHistory] = useState<HistoryProject[]>([]);
   const [historyNote, setHistoryNote] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/projects");
-        const data = (await res.json().catch(() => ({}))) as { projects?: HistoryProject[] };
-        if (!res.ok) throw new Error("History unavailable.");
-        setHistory(data.projects ?? []);
-      } catch {
-        setHistoryNote("Recent essays are unavailable right now.");
+    try {
+      const raw = localStorage.getItem("essaywriter:project-ids");
+      const ids: string[] = raw ? (JSON.parse(raw) as string[]) : [];
+      if (!Array.isArray(ids) || ids.length === 0) {
+        setHistory([]);
+        return;
       }
-    })();
+      (async () => {
+        try {
+          const res = await fetch(`/api/projects?ids=${encodeURIComponent(ids.slice(0, 100).join(","))}`);
+          const data = (await res.json().catch(() => ({}))) as { projects?: HistoryProject[] };
+          if (!res.ok) throw new Error("History unavailable.");
+          setHistory(data.projects ?? []);
+        } catch {
+          setHistoryNote("Recent essays are unavailable right now.");
+        }
+      })();
+    } catch {
+      setHistory([]);
+    }
   }, []);
+
+  // Remember every project this browser creates for future history lookups.
+  useEffect(() => {
+    if (!projectId) return;
+    try {
+      const raw = localStorage.getItem("essaywriter:project-ids");
+      const ids: string[] = raw ? (JSON.parse(raw) as string[]) : [];
+      if (!Array.isArray(ids)) return;
+      if (!ids.includes(projectId)) {
+        localStorage.setItem(
+          "essaywriter:project-ids",
+          JSON.stringify([projectId, ...ids].slice(0, 100))
+        );
+      }
+    } catch {
+      // private mode etc: history just won't persist
+    }
+  }, [projectId]);
 
   const selectedEntry = versions.find((v) => v.id === selectedVersionId) ?? versions[versions.length - 1] ?? null;
   const latestIssues: ValidationIssue[] = selectedEntry?.issues ?? [];

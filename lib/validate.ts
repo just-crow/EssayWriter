@@ -41,6 +41,76 @@ export function assertStructureUsable(s: EssayStructure): void {
 
 export type ValidationIssue = { code: string; detail: string };
 
+/**
+ * Drop footnote entries never cited in the text (and their Works Cited
+ * lines), then renumber the rest sequentially. Dangling markers with no
+ * footnote entry are removed from the text. Only deletes tokens, never
+ * prose. Returns the dropped footnote ids.
+ */
+export function pruneOrphanFootnotes(draft: EssayDraft): number[] {
+  const defined = new Set(draft.footnotes.map((f) => f.id));
+  const bodyText = [
+    ...draft.introduction,
+    ...draft.sections.flatMap((s) => s.paragraphs),
+    ...draft.conclusion,
+  ].join("\n");
+  const order: number[] = [];
+  for (const m of bodyText.matchAll(/\[\^(\d+)\]/g)) {
+    const id = Number(m[1]);
+    if (defined.has(id) && !order.includes(id)) order.push(id);
+  }
+  const idMap = new Map(order.map((oldId, i) => [oldId, i + 1]));
+  const dropped = draft.footnotes.map((f) => f.id).filter((id) => !idMap.has(id));
+  const rewrite = (t: string): string =>
+    t.replace(/\[\^(\d+)\]/g, (_m, n: string) => {
+      const next = idMap.get(Number(n));
+      return next === undefined ? "" : `[^${next}]`;
+    });
+  draft.introduction = draft.introduction.map(rewrite);
+  for (const s of draft.sections) s.paragraphs = s.paragraphs.map(rewrite);
+  draft.conclusion = draft.conclusion.map(rewrite);
+  const droppedUrls = new Set(
+    draft.footnotes
+      .filter((f) => !idMap.has(f.id))
+      .map((f) => f.url)
+      .filter((u) => u && u.length >= 24)
+  );
+  draft.footnotes = draft.footnotes
+    .filter((f) => idMap.has(f.id))
+    .map((f) => ({ ...f, id: idMap.get(f.id) as number }))
+    .sort((a, b) => a.id - b.id);
+  if (droppedUrls.size > 0) {
+    draft.worksCited = draft.worksCited.filter(
+      (w) => ![...droppedUrls].some((u) => w.includes(u as string))
+    );
+  }
+  return dropped;
+}
+
+/**
+ * Word requires every in-text footnote reference to point at a UNIQUE
+ * footnote definition: citing one source twice with a single shared id
+ * makes Word report the file as corrupted (verified against real Word).
+ * So each [^n] occurrence gets its own sequential footnote entry with
+ * cloned text — exactly the "repeat the full citation on every use" rule.
+ * Dangling markers with no footnote entry are removed. Mutates the draft.
+ */
+export function expandFootnoteUses(draft: EssayDraft): void {
+  const byId = new Map(draft.footnotes.map((f) => [f.id, f]));
+  const expanded: EssayDraft["footnotes"] = [];
+  const rewrite = (t: string): string =>
+    t.replace(/\[\^(\d+)\]/g, (_m, n: string) => {
+      const src = byId.get(Number(n));
+      if (!src) return "";
+      expanded.push({ ...src, id: expanded.length + 1 });
+      return `[^${expanded.length}]`;
+    });
+  draft.introduction = draft.introduction.map(rewrite);
+  for (const s of draft.sections) s.paragraphs = s.paragraphs.map(rewrite);
+  draft.conclusion = draft.conclusion.map(rewrite);
+  draft.footnotes = expanded;
+}
+
 export function validateDraft(draft: EssayDraft): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const allText = draftText(draft);
@@ -73,6 +143,15 @@ export function validateDraft(draft: EssayDraft): ValidationIssue[] {
       issues.push({
         code: "FOOTNOTE_MISSING",
         detail: `Marker [^${m[1]}] has no matching footnote entry.`,
+      });
+    }
+  }
+
+  for (const fn of draft.footnotes) {
+    if (!used.has(fn.id)) {
+      issues.push({
+        code: "FOOTNOTE_ORPHAN",
+        detail: `Footnote ${fn.id} is never cited in the text — its marker is missing.`,
       });
     }
   }

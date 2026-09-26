@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
 import { z } from "zod";
 import { completeJson, nimChatLong } from "@/lib/nim";
 import { DRAFT_SYSTEM, draftUserPrompt } from "@/lib/prompts";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, assertDraftUsable } from "@/lib/validate";
+import { validateDraft, assertDraftUsable, pruneOrphanFootnotes, expandFootnoteUses } from "@/lib/validate";
+import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -21,14 +20,6 @@ const Body = z.object({
   sourcesJson: z.string().min(2).max(60000),
   projectId: z.string().nullish(),
 });
-
-async function saveDocx(projectId: string, version: number, buf: Buffer): Promise<string> {
-  const dir = path.join(process.cwd(), "storage");
-  await fs.mkdir(dir, { recursive: true });
-  const rel = path.join("storage", `${projectId}-v${version}.docx`);
-  await fs.writeFile(path.join(process.cwd(), rel), buf);
-  return rel;
-}
 
 export async function POST(req: Request) {
   try {
@@ -47,6 +38,13 @@ export async function POST(req: Request) {
       },
       nimChatLong
     );
+    // Repair, don't reject: drop uncited entries, then give every citation
+    // occurrence its own footnote entry (Word corrupts on shared ids).
+    pruneOrphanFootnotes(draft);
+    expandFootnoteUses(draft);
+    if (draft.footnotes.length === 0) {
+      throw new Error("The essay came back without usable citations. Try again.");
+    }
     const issues = validateDraft(draft);
     const wordCount = countWords(draft);
     const buffer = await buildDocx(draft);
@@ -66,7 +64,7 @@ export async function POST(req: Request) {
 
     const existing = await prisma.essayVersion.count({ where: { projectId } });
     const version = existing + 1;
-    const docxPath = await saveDocx(projectId, version, buffer);
+    const docxPath = await saveDocxFile(projectId, version, buffer);
     const summary = `${draft.title} (${wordCount} words, ${draft.footnotes.length} footnotes, ${draft.worksCited.length} cited). Coverage: ${draft.coverage.filter((c) => c.met).length}/${draft.coverage.length} met.`;
 
     const record = await prisma.essayVersion.create({

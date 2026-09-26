@@ -280,14 +280,19 @@ export const prisma = {
     async findMany(args?: {
       orderBy?: { updatedAt?: "asc" | "desc" };
       take?: number;
+      where?: { id?: { in?: string[] } };
       include?: {
         versions?: { orderBy?: { version?: "asc" | "desc" }; take?: number } | boolean;
         _count?: { select?: { versions?: boolean } } | boolean;
       };
     }): Promise<Array<ProjectRecord & { versions?: EssayVersionRecord[]; _count?: { versions: number } }>> {
+      const ids = args?.where?.id?.in?.filter(Boolean) ?? [];
       let projects: ProjectRecord[] = [];
       try {
         let query = supabase.from("Project").select("*");
+        if (ids.length > 0) {
+          query = query.in("id", ids);
+        }
         if (args?.orderBy?.updatedAt) {
           query = query.order("updatedAt", { ascending: args.orderBy.updatedAt === "asc" });
         }
@@ -307,6 +312,11 @@ export const prisma = {
 
       if (projects.length === 0) {
         projects = Array.from(memoryDb.projects.values());
+      }
+
+      // Ownership scoping applies to the memory fallback too.
+      if (ids.length > 0) {
+        projects = projects.filter((p) => ids.includes(p.id));
       }
 
       // Sort fallback if needed

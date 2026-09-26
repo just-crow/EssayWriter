@@ -3,8 +3,19 @@ import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(req: Request) {
+  // Privacy: history is scoped to project IDs this browser created
+  // (stored in its localStorage). No ids -> empty list, never everyone's.
+  const ids =
+    new URL(req.url).searchParams
+      .get("ids")
+      ?.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 100) ?? [];
+  if (ids.length === 0) return NextResponse.json({ projects: [] });
   const projects = await prisma.project.findMany({
+    where: { id: { in: ids } },
     orderBy: { updatedAt: "desc" },
     take: 50,
     include: {

@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
 import { z } from "zod";
 import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, assertDraftUsable } from "@/lib/validate";
+import { validateDraft, assertDraftUsable, pruneOrphanFootnotes, expandFootnoteUses } from "@/lib/validate";
+import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -48,14 +47,17 @@ export async function POST(req: Request) {
       },
       nimChatLong
     );
+    pruneOrphanFootnotes(draft);
+    expandFootnoteUses(draft);
+    if (draft.footnotes.length === 0) {
+      throw new Error("The revision came back without usable citations. Try again.");
+    }
     const issues = validateDraft(draft);
     const wordCount = countWords(draft);
     const buffer = await buildDocx(draft);
 
     const version = base.version + 1;
-    const rel = path.join("storage", `${body.projectId}-v${version}.docx`);
-    await fs.mkdir(path.join(process.cwd(), "storage"), { recursive: true });
-    await fs.writeFile(path.join(process.cwd(), rel), buffer);
+    const rel = await saveDocxFile(body.projectId, version, buffer);
 
     const summary = `Revision v${version}: ${body.instruction.slice(0, 140)} (${wordCount} words, ${draft.footnotes.length} footnotes).`;
     const record = await prisma.essayVersion.create({
