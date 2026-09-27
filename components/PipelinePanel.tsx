@@ -412,7 +412,7 @@ export default function PipelinePanel(props: PipelinePanelProps) {
           <Empty title="Nothing to check" hint="Style and link checks appear here after the first draft." />
         ) : issues.length === 0 ? (
           <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
-            No issues found. The draft passed every check.
+            No reported style or citation-format issues.
           </p>
         ) : (
           <ul className="flex flex-col gap-2">

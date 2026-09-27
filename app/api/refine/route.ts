@@ -2,14 +2,15 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
-import { DraftSchema } from "@/lib/essay-types";
+import { DraftSchema, WriterDraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, prepareDraft, pruneUnverifiedEvidence, sourcesTextMap } from "@/lib/validate";
+import { validateDraft, prepareDraft, sourcesTextMap, assertNoRepeatedSentences, splitSentences } from "@/lib/validate";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
 import type { SourceItem } from "@/lib/essay-types";
 import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
 import { auditAndAlignGrounding } from "@/lib/grounding-audit";
+import { assertCitationMinimums } from "@/lib/citation-limits";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -18,6 +19,8 @@ const Body = z.object({
   projectId: z.string().min(1),
   versionId: z.string().nullish(),
   instruction: z.string().min(1).max(10000),
+  minimumFootnotes: z.number().int().min(1).max(30).default(1),
+  minimumSources: z.number().int().min(1).max(18).default(1),
 });
 
 export async function POST(req: Request) {
@@ -67,7 +70,8 @@ export async function POST(req: Request) {
         `${project.topic} ${body.instruction}`.trim().slice(0, 300),
         project.topic,
       ].filter((q, i, arr) => q.length > 0 && arr.indexOf(q) === i).slice(0, 3);
-      const web = await liveSearch(followQueries, 4);
+      const prohibitNewSources = /\b(?:do not|don't|without|no)\b[^.!?\n]{0,100}\bsources\b/i.test(body.instruction);
+      const web = prohibitNewSources ? [] : await liveSearch(followQueries, 4);
       const fresh = web.filter((w) => !citedUrls.has(normalizeUrl(w.url))).slice(0, 4);
       if (fresh.length > 0) {
         const label = `this follow-up (“${body.instruction.slice(0, 80)}”)`;
@@ -112,38 +116,41 @@ export async function POST(req: Request) {
     const draft = await completeJson(
       {
         system: REFINE_SYSTEM,
-        user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\n\nCurrent essay JSON:\n${base.essayJson}\n\nExisting source texts:\n${JSON.stringify(dbSources.filter((s) => citedUrls.has(normalizeUrl(s.url))).map(({ title, url, content }) => ({ title, url, content })))}\n\nUser revision instruction:\n${body.instruction}\n\n${sourceBlock}\n\nReturn the revised essay JSON now.`,
-        temperature: 0.6,
-        maxTokens: Math.min(32768, Math.max(20000, project.wordTarget * 4 + 6000)),
-        schema: DraftSchema,
+        user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\nMinimum footnotes: ${body.minimumFootnotes}\nMinimum distinct cited works: ${body.minimumSources}\nDevelop factual findings from at least this many different source URLs before writing. Cite at least the requested number of separate factual sentences; These are minimums, not exact counts or caps: you may use more footnotes and more distinct works when they support the essay. Do not add decorative citations.\n\nCurrent essay JSON:\n${base.essayJson}\n\nExisting source texts:\n${JSON.stringify(dbSources.filter((s) => body.minimumSources > citedUrls.size || citedUrls.has(normalizeUrl(s.url))).map(({ title, url, content }) => ({ title, url, content })))}\n\nUser revision instruction:\n${body.instruction}\n\n${sourceBlock}\n\nReturn the revised essay JSON now.`,
+        temperature: 1,
+        maxTokens: Math.min(32768, Math.max(12000, project.wordTarget * 3 + 6000)),
+        schema: WriterDraftSchema,
+        responseFormat: { type: "json_object" },
         parseTries: 3,
-        retryTempDelta: -0.3,
+        repairResponse: (draft) => JSON.stringify(draft),
+        retryTempDelta: 0,
         validate: async (d) => {
-          try {
-            prepareDraft(d, sourcesText);
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            if (msg.includes("Unverifiable evidence")) {
-              const pruned = pruneUnverifiedEvidence(d, sourcesText);
-              if (pruned > 0) {
-                prepareDraft(d, sourcesText);
-              } else {
-                throw err;
-              }
-            } else {
-              throw err;
-            }
-          }
+          prepareDraft(d, sourcesText, { deferEvidence: true });
           const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources]);
+          assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
+          const bodyEnd = d.introduction.length + d.sections.flatMap((section) => section.paragraphs).length;
+          const bodyClaims = new Set(d.evidence.filter((item) => item.paragraph >= d.introduction.length && item.paragraph < bodyEnd).map((item) => item.source));
+          if (bodyClaims.size < Math.max(1, Math.floor(project.wordTarget / 400))) {
+            throw new Error(`Develop more directly supported source findings in the body. Currently only ${bodyClaims.size} factual findings are verified.`);
+          }
           const removed = audit.removed.length > 0
             ? ` The source audit removed these unsupported claims; replace them only with directly supported statements:\n${audit.removed.slice(0, 8).join("\n")}`
             : "";
           const words = countWords(d);
+          assertNoRepeatedSentences(d);
           if (Math.abs(words - project.wordTarget) > 400) {
             throw new Error(`The grounded revision is ${words} words. Keep it within 400 words of the ${project.wordTarget}-word target.${removed}`);
           }
+          if (project.wordTarget >= 400) {
+            const proseWords = (paragraph: string) => paragraph.replace(/\[\^\d+\]/g, "").split(/\s+/).filter(Boolean).length;
+            if (d.introduction.length !== 1 || d.conclusion.length !== 1 || [...d.introduction, ...d.conclusion].some((paragraph) => proseWords(paragraph) < 30) || d.sections.some((section) => !section.paragraphs.length || section.paragraphs.some((paragraph) => proseWords(paragraph) < 60 || splitSentences(paragraph).length < 3))) {
+              throw new Error("Preserve one complete introduction, one complete conclusion, and developed body paragraphs of at least three sentences and 60 words.");
+            }
+          }
         },
-        thinking: false,
+        thinking: true,
+        lowEffort: true,
+        reasoningBudget: 1024,
       },
       nimChatLong
     );

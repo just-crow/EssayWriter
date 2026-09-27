@@ -4,6 +4,8 @@ import { useState } from "react";
 import type { DraftResult } from "./studio-types";
 
 interface RefineChatProps {
+  minimumFootnotes: number;
+  minimumSources: number;
   projectId: string | null;
   versionId: string | null;
   version: number | null;
@@ -16,7 +18,7 @@ interface ChatLine {
   text: string;
 }
 
-export default function RefineChat({ projectId, versionId, version, disabled, onRefined }: RefineChatProps) {
+export default function RefineChat({ projectId, versionId, version, disabled, onRefined, minimumFootnotes, minimumSources }: RefineChatProps) {
   const [instruction, setInstruction] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +41,7 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
       const res = await fetch("/api/refine", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, versionId, instruction: text }),
+        body: JSON.stringify({ projectId, versionId, instruction: text, minimumFootnotes, minimumSources }),
       });
       const data = (await res.json().catch(() => ({}))) as DraftResult & { error?: string };
       if (!res.ok) throw new Error(data.error || `Refine failed (${res.status}).`);

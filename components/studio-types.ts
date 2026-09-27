@@ -58,6 +58,7 @@ export interface HistoryProject {
   id: string;
   title: string;
   topic: string;
+  instruction?: string;
   wordTarget: number;
   updatedAt: string;
   versions: HistoryVersion[];

@@ -66,7 +66,7 @@ const MAX_QUERIES = 6;
 /** Per-extract upper bound so page fetching cannot hang the stage. */
 const EXTRACT_TIMEOUT_MS = 30_000;
 /** Max characters of page text kept per source (bounds prompt size). */
-export const MAX_SOURCE_CHARS = 3000;
+export const MAX_SOURCE_CHARS = 10000;
 
 /** Normalize for membership checks: lowercase host, trim trailing slash,
  * drop tracking params and fragments. */
@@ -250,7 +250,7 @@ export async function liveSearch(
 export async function extractPages(urls: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const key = process.env.TAVILY_API_KEY;
-  const targets = urls.filter((u) => normalizeUrl(u)).slice(0, 12);
+  const targets = urls.filter((u) => normalizeUrl(u)).slice(0, 18);
   if (!key || targets.length === 0) return out;
   try {
     const res = await fetch("https://api.tavily.com/extract", {

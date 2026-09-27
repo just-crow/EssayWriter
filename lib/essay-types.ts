@@ -79,5 +79,52 @@ export const DraftSchema = z.object({
 });
 
 export type EssayStructure = z.infer<typeof StructureSchema>;
+/** Models sometimes return one paragraph as an array of sentences, or
+ * a single introduction as a string. Preserve prose and paragraph boundaries
+ * while normalizing these equivalent representations before validation. */
+function normalizeWriterShape(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const draft = input as Record<string, unknown>;
+  const text = (value: unknown): unknown => Array.isArray(value) && value.every((part) => typeof part === "string") ? value.join(" ") : value;
+  const paragraphs = (value: unknown): unknown => typeof value === "string" ? [value] : Array.isArray(value) ? value.map(text) : value;
+  const single = (value: unknown): unknown => {
+    const normalized = paragraphs(value);
+    return Array.isArray(normalized) && normalized.every((part) => typeof part === "string") ? [normalized.join(" ")] : normalized;
+  };
+  return {
+    ...draft,
+    introduction: single(draft.introduction),
+    conclusion: single(draft.conclusion),
+    sections: Array.isArray(draft.sections) ? draft.sections.map((section) => {
+      if (!section || typeof section !== "object" || Array.isArray(section)) return section;
+      return { ...section, paragraphs: paragraphs(section.paragraphs) };
+    }) : draft.sections,
+  };
+}
+// Evidence anchors are produced by the server's source verifier, not by
+// asking the writer to copy quotations or reproduce a second numbering scheme.
+export const WriterDraftSchema = z.preprocess(normalizeWriterShape, DraftSchema.extend({ evidence: z.unknown().optional() })
+  .transform((draft) => ({ ...draft, evidence: [] as z.infer<typeof EvidenceSchema>[] })));
+
+/** Validate representation here. Length and depth apply to verified prose. */
+export function writerDraftSchema() {
+  // NIM's constrained decoder treats patterns as a whole-string grammar.
+  // Allow prose around the marker rather than decoding a marker alone.
+  // Exclude raw JSON delimiters: this decoder applies the regex before
+  // string escaping, so an unrestricted wildcard can consume closing quotes.
+  const cited = z.string().regex(/[^"\\\r\n]*\[\^[1-9]\d*\][^"\\\r\n]*/, "Use a cited prose paragraph without double quotes or line breaks.");
+  return z.preprocess(normalizeWriterShape, DraftSchema.extend({
+    introduction: z.array(cited.min(1)).length(1),
+    conclusion: z.array(cited.min(1)).length(1),
+    sections: z.array(DraftSectionSchema.extend({
+      // Final paragraph depth is checked after source verification and
+      // consolidation, rather than rejecting a raw paragraph before merging.
+      paragraphs: z.array(cited.min(1)).min(1),
+    })).min(1),
+    evidence: z.unknown().optional(),
+    footnotes: z.unknown().optional(),
+    worksCited: z.unknown().optional(),
+  }).transform((draft) => ({ ...draft, footnotes: [] as z.infer<typeof DraftFootnoteSchema>[], worksCited: [] as string[], evidence: [] as z.infer<typeof EvidenceSchema>[] })));
+}
 export type SourceItem = z.infer<typeof SourceItemSchema>;
 export type EssayDraft = z.infer<typeof DraftSchema>;

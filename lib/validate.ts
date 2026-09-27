@@ -19,7 +19,7 @@ function draftText(d: EssayDraft): string {
 /** Abbreviations whose periods must not split sentences. */
 const ABBREVIATIONS = [
   "e.g", "i.e", "etc", "Dr", "Mr", "Mrs", "Ms", "St", "vs", "approx",
-  "No", "Fig", "fig", "al", "Dept", "Univ", "Rep", "Sen", "Gov", "Prof",
+  "No", "Fig", "fig", "al", "Dept", "Univ", "Rep", "Sen", "Gov", "Prof", "U.S", "U.K", "U.N", "Ph.D",
 ];
 
 /** Split text into sentences without breaking on common abbreviations.
@@ -33,10 +33,10 @@ export function splitSentences(text: string): string[] {
   // Decimal points are not sentence boundaries (for example, 76.5%).
   t = t.replace(/(\d)\.(?=\d)/g, `$1${PH}`);
   for (const ab of ABBREVIATIONS) {
-    const re = new RegExp(`\\b${ab}\\.`, "g");
+    const re = new RegExp(`\\b${ab.replace(/\./g, "\\.")}\\.`, "g");
     // Replace EVERY dot inside the match ("e.g" keeps an interior dot),
     // so no abbreviation fragment can ever split a sentence.
-    t = t.replace(re, () => ab.split(".").join(PH));
+    t = t.replace(re, () => `${ab.split(".").join(PH)}${PH}`);
   }
   const out: string[] = [];
   const re = /[^.!?]+(?:[.!?]+(?:\s*\[\^\d+\])*)?/g;
@@ -57,6 +57,16 @@ export function citedSentenceShare(draft: EssayDraft): { share: number; cited: n
   if (total === 0) return { share: 0, cited: 0, total: 0 };
   const cited = sentences.filter((s) => /\[\^\d+\]/.test(s)).length;
   return { share: cited / total, cited, total };
+}
+
+/** Reject source-sentence recycling used to meet the word target. */
+export function assertNoRepeatedSentences(draft: EssayDraft): void {
+  const sentences = [...draft.introduction, ...draft.sections.flatMap((section) => section.paragraphs), ...draft.conclusion]
+    .flatMap(splitSentences).map((sentence) => sentence.replace(/\[\^\d+\]/g, "").replace(/\s+/g, " ").trim().toLowerCase())
+    .filter((sentence) => sentence.split(/\s+/).length >= 12);
+  if (sentences.length - new Set(sentences).size > 1) {
+    throw new Error("The essay repeats substantial sentences across paragraphs. Paraphrase the evidence and develop each finding once, with distinct analysis and explicit recommendations. Do not pad the word count by repeating source sentences.");
+  }
 }
 
 export function cleanRawQuote(s: string): string {
@@ -534,8 +544,16 @@ export function consolidateSectionParagraphs(draft: EssayDraft): void {
 
   // Remap evidence paragraph indexes and clamp
   if (draft.evidence) {
+    const finalParagraphs = [...draft.introduction, ...draft.sections.flatMap((s) => s.paragraphs), ...draft.conclusion];
     const totalParas = 1 + finalSectionCount + draft.conclusion.length;
     for (const e of draft.evidence) {
+      // Each audited citation occurrence has a unique footnote ID. Use its
+      // final location after cross-section merges, rather than a stale index.
+      const citedParagraph = finalParagraphs.findIndex((text) => text.includes(`[^${e.source}]`));
+      if (citedParagraph >= 0) {
+        e.paragraph = citedParagraph;
+        continue;
+      }
       if (oldToNew.has(e.paragraph)) {
         e.paragraph = oldToNew.get(e.paragraph)!;
       }
@@ -549,12 +567,12 @@ export function consolidateSectionParagraphs(draft: EssayDraft): void {
 /** Run citation repair inside completeJson's validation/retry boundary.
  * Restore omitted markers only from evidence already checked against its
  * actual source text. Never assign an arbitrary bibliography entry. */
-export function prepareDraft(draft: EssayDraft, sourcesText: Map<string, string>): void {
+export function prepareDraft(draft: EssayDraft, sourcesText: Map<string, string>, options: { deferEvidence?: boolean } = {}): void {
   assertDraftUsable(draft);
   const ids = draft.footnotes.map((f) => f.id);
   if (new Set(ids).size !== ids.length) throw new Error("The essay has duplicate footnote IDs. Give each source a distinct ID.");
   normalizeMarkerFormat(draft);
-  let paragraphs = [...draft.introduction, ...draft.sections.flatMap((s) => s.paragraphs), ...draft.conclusion];
+  const paragraphs = [...draft.introduction, ...draft.sections.flatMap((s) => s.paragraphs), ...draft.conclusion];
   // 1-based paragraph indexing recovery for evidence
   if (
     draft.evidence &&
@@ -578,6 +596,9 @@ export function prepareDraft(draft: EssayDraft, sourcesText: Map<string, string>
       if (!defined.has(Number(match[1]))) throw new Error(`Citation [^${match[1]}] has no footnote. Supply its source or remove the unsupported claim.`);
     }
   }
+  // The semantic audit verifies each claim against its original citation.
+  // Do not fabricate quote anchors or change sources before that check.
+  if (options.deferEvidence) return;
   const byId = new Map(draft.footnotes.map((f) => [f.id, f]));
   const grounded = new Set(draft.evidence.map((item) => item.paragraph));
   const missing = paragraphs.map((_text, paragraph) => paragraph).filter((paragraph) => !grounded.has(paragraph));
@@ -779,15 +800,15 @@ export function validateDraft(draft: EssayDraft): ValidationIssue[] {
     }
   }
 
-  // Soft visibility (never blocking): body paragraphs without an anchored
-  // quote rely on markers/common knowledge alone.
+  // A citation should have an anchor. Analysis and labeled proposals may
+  // have no external factual claim and therefore no citation to anchor.
   {
     const introLen = draft.introduction.length;
-    const secCount = draft.sections.flatMap((s) => s.paragraphs).length;
+    const paragraphs = draft.sections.flatMap((s) => s.paragraphs);
     const withEv = new Set((draft.evidence ?? []).map((e) => e.paragraph));
     let bare = 0;
-    for (let i = 0; i < secCount; i++) {
-      if (!withEv.has(introLen + i)) bare++;
+    for (let i = 0; i < paragraphs.length; i++) {
+      if (/\[\^\d+\]/.test(paragraphs[i]) && !withEv.has(introLen + i)) bare++;
     }
     if (bare > 0) {
       issues.push({

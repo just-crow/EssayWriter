@@ -81,10 +81,10 @@ function mlaFootnoteText(fn: {
 export function countWords(draft: EssayDraft): number {
   const all = [
     ...draft.introduction,
-    ...draft.sections.flatMap((s) => [s.heading, ...s.paragraphs]),
+    ...draft.sections.flatMap((s) => s.paragraphs),
     ...draft.conclusion,
   ].join(" ");
-  return all.split(/\s+/).filter(Boolean).length;
+  return all.replace(/\[\^\d+\]/g, "").split(/\s+/).filter(Boolean).length;
 }
 
 export async function buildDocx(draft: EssayDraft): Promise<Buffer> {

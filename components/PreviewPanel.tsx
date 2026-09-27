@@ -10,6 +10,8 @@ interface PreviewPanelProps {
   versions: VersionEntry[];
   onSelectVersion: (id: string) => void;
   wordTarget: number;
+  minimumFootnotes: number;
+  minimumSources: number;
   projectId: string | null;
   draftBusy: boolean;
   onRefined: (result: DraftResult) => void;
@@ -29,6 +31,8 @@ export default function PreviewPanel({
   versions,
   onSelectVersion,
   wordTarget,
+  minimumFootnotes,
+  minimumSources,
   projectId,
   draftBusy,
   onRefined,
@@ -126,7 +130,7 @@ export default function PreviewPanel({
           <ol>
             {loadedDraft.footnotes.map((f) => (
               <li key={f.id}>
-                {f.author}, “{f.title}”{f.publisher ? `, ${f.publisher}` : ""}
+                {f.author ? `${f.author}, ` : ""}“{f.title}”{f.publisher ? `, ${f.publisher}` : ""}
                 {f.year ? ` (${f.year})` : ""}.{f.url ? ` ${f.url}` : ""}
                 {f.accessed ? ` Accessed ${f.accessed}.` : ""}
               </li>
@@ -179,7 +183,7 @@ export default function PreviewPanel({
             <div className="grid grid-cols-3 gap-2">
               <Stat label="Words" value={formatWords(entry.wordCount)} />
               <Stat label="Footnotes" value={String(entry.footnoteCount)} />
-              <Stat label="Works cited" value={String(entry.worksCitedCount)} />
+              <Stat label="Works cited" value={String(loadedDraft?.worksCited.length ?? entry.worksCitedCount)} />
             </div>
             <div className="mt-3">
               <div className="flex items-center justify-between text-xs font-medium text-stone-600">
@@ -250,7 +254,7 @@ export default function PreviewPanel({
                     {f.author}
                     {f.title ? (
                       <>
-                        {", "}
+                        {f.author ? ", " : ""}
                         <em>{f.title}</em>
                       </>
                     ) : null}
@@ -284,6 +288,8 @@ export default function PreviewPanel({
           Keep prompting
         </h2>
         <RefineChat
+          minimumFootnotes={minimumFootnotes}
+          minimumSources={minimumSources}
           projectId={projectId}
           versionId={entry?.id ?? null}
           version={entry?.version ?? null}

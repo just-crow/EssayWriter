@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { z } from "zod";
+import { zodResponseFormat } from "openai/helpers/zod";
 import type {
   ChatCompletionCreateParamsNonStreaming,
   ChatCompletionCreateParamsStreaming,
@@ -66,6 +67,7 @@ export async function withRetry<T>(
 }
 
 interface ChatParams {
+  model?: string;
   system: string;
   user: string;
   temperature?: number;
@@ -80,11 +82,15 @@ interface ChatParams {
    * leave on for short structured ones where reasoning helps.
    */
   thinking?: boolean;
+  /** Short reasoning for source-grounded writing without unbounded traces. */
+  lowEffort?: boolean;
+  reasoningBudget?: number;
+  responseFormat?: ChatCompletionCreateParamsNonStreaming["response_format"];
 }
 
 /** Provider extension field (Nemotron reasoning toggle). */
 type ExtraBody = {
-  chat_template_kwargs?: { enable_thinking: boolean };
+  chat_template_kwargs?: { enable_thinking: boolean; low_effort?: boolean; reasoning_budget?: number };
   /** NVIDIA's current Nemotron API uses this OpenAI-compatible control. */
   reasoning_effort?: "none";
 };
@@ -106,14 +112,22 @@ function requestBody(params: ChatParams, extra?: { stream?: boolean }): (
     { role: "user", content: params.user },
   ];
   const body = {
-    model: NIM_MODEL,
+    model: params.model ?? NIM_MODEL,
     messages,
     temperature: params.temperature ?? 0.6,
+    top_p: 0.95,
     max_tokens: params.maxTokens ?? 6000,
+    ...(params.responseFormat ? { response_format: params.responseFormat } : {}),
     ...extra,
-    ...(params.thinking === false
+    ...(!(params.model ?? NIM_MODEL).includes("nemotron") ? {} : params.thinking === false
       ? { chat_template_kwargs: { enable_thinking: false }, reasoning_effort: "none" as const }
-      : {}),
+      : params.thinking === true
+        ? { chat_template_kwargs: {
+          enable_thinking: true,
+          ...(params.lowEffort ? { low_effort: true } : {}),
+          ...(params.reasoningBudget !== undefined ? { reasoning_budget: params.reasoningBudget } : {}),
+        } }
+        : {}),
   };
   // The installed OpenAI SDK predates NVIDIA's reasoning_effort extension.
   return body as (
@@ -214,6 +228,24 @@ export function parseModelJson(text: string): unknown {
   }
 }
 
+/** Provider decoding requires all object fields. Defaults and optional
+ * fields remain supported by the application parser for legacy responses. */
+function requiredOutputSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
+  if (schema instanceof z.ZodDefault) return requiredOutputSchema(schema.removeDefault());
+  if (schema instanceof z.ZodOptional) return requiredOutputSchema(schema.unwrap());
+  if (schema instanceof z.ZodNullable) return requiredOutputSchema(schema.unwrap()).nullable();
+  if (schema instanceof z.ZodEffects) return requiredOutputSchema(schema.innerType());
+  if (schema instanceof z.ZodArray) {
+    return new z.ZodArray({ ...schema._def, type: requiredOutputSchema(schema.element) });
+  }
+  if (schema instanceof z.ZodObject) {
+    const shape: Record<string, z.ZodTypeAny> = {};
+    for (const [key, value] of Object.entries(schema.shape)) shape[key] = requiredOutputSchema(value as z.ZodTypeAny);
+    return z.object(shape).strict();
+  }
+  return schema;
+}
+
 /**
  * Full request cycle for JSON-returning stages: generate, lenient-parse,
  * schema-validate. A stochastic malformed answer gets one fresh retry at
@@ -227,6 +259,8 @@ export async function completeJson<T extends z.ZodTypeAny>(
     parseTries?: number;
     /** Extra domain check (e.g. non-empty). Throwing retries the generation. */
     validate?: (v: z.output<T>) => void | Promise<void>;
+    /** Use the verified, cleaned value as the basis of a domain repair. */
+    repairResponse?: (v: z.output<T>) => string;
     /** Temperature shift on retry. Positive adds variety (good for refusals
      * and malformed output); negative cools down (good for verbatim
      * fidelity). Defaults to +0.2. */
@@ -241,6 +275,7 @@ export async function completeJson<T extends z.ZodTypeAny>(
   let seen = 0;
   let feedback = "";
   let priorRaw = "";
+  const responseFormat = params.responseFormat ?? zodResponseFormat(requiredOutputSchema(params.schema), "response");
   const report = (base: number) => (n: number) => {
     seen = Math.max(seen, base + n);
     params.onAttempt?.(seen);
@@ -250,27 +285,29 @@ export async function completeJson<T extends z.ZodTypeAny>(
     try {
       raw =
         i === 0
-          ? await generate({ ...params, onAttempt: report(i * perTry) })
+          ? await generate({ ...params, responseFormat, onAttempt: report(i * perTry) })
         : await generate({
             ...params,
+            responseFormat,
             user: feedback.toLowerCase().includes("malformed") || feedback.toLowerCase().includes("json")
               ? `${params.user}\n\nVALIDATION FAILURE:\n${feedback}\nThe previous output was malformed and could not be parsed as valid JSON. Return strictly valid RFC-8259 JSON matching the schema. Escape every quote inside prose strings (use \\") and ensure all brackets are properly closed.`
-              : `${params.user}\n\nThe previous response is included below. Repair it instead of starting over. Preserve valid essay content and change only what is needed to pass validation.\n\nVALIDATION FAILURE:\n${feedback}\n\nPREVIOUS RESPONSE:\n${priorRaw.slice(0, 80_000)}\n\nReturn one complete corrected JSON object with matching [^n] markers, footnotes, and evidence. Escape quotes and newlines inside JSON strings.`,
+              : `${params.user}\n\nThe previous response is included below. Repair it instead of starting over. Preserve valid content and change only what is needed to pass validation.\n\nVALIDATION FAILURE:\n${feedback}\n\nPREVIOUS RESPONSE:\n${priorRaw.slice(0, 80_000)}\n\nReturn one complete corrected JSON object matching the required schema. Preserve source IDs and escape quotes and newlines inside JSON strings.`,
             temperature: Math.min(1, Math.max(0.1, (params.temperature ?? 0.6) + i * tempDelta)),
             onAttempt: report(i * perTry),
           });
     } catch (e) {
       const m = e instanceof Error ? e.message : "request failed";
-      last = new Error(`Model service error (${m}). Try again in a bit.`);
-      feedback = m;
-      continue;
+      // Transport retries already happen inside nimChat/Long. Repeating
+      // them once per JSON repair can turn an outage into a very long wait.
+      throw new Error(`Model service error (${m}). Try again in a bit.`);
     }
+    let value: z.output<T> | undefined;
     try {
-      const value = params.schema.parse(parseModelJson(raw));
+      value = params.schema.parse(parseModelJson(raw));
       await params.validate?.(value);
       return value;
     } catch (e) {
-      priorRaw = raw;
+      priorRaw = value !== undefined && params.repairResponse ? params.repairResponse(value) : raw;
       last = e instanceof z.ZodError
         ? new Error(`The model returned invalid fields: ${e.issues.slice(0, 3).map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}. Try again.`)
         : e;

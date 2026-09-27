@@ -45,6 +45,23 @@ export default function StudioPage() {
   // Context state
   const [topic, setTopic] = useState("");
   const [wordTarget, setWordTarget] = useState(1200);
+  const [minimumFootnotes, setMinimumFootnotes] = useState(6);
+  const [minimumSources, setMinimumSources] = useState(3);
+  useEffect(() => {
+    const restore = setTimeout(() => {
+      try {
+        const settings = JSON.parse(localStorage.getItem("essaywriter:citation-minimums") || "null");
+        if (Number.isInteger(settings?.minimumFootnotes) && settings.minimumFootnotes >= 1 && settings.minimumFootnotes <= 30) setMinimumFootnotes(settings.minimumFootnotes);
+        if (Number.isInteger(settings?.minimumSources) && settings.minimumSources >= 1 && settings.minimumSources <= 18) setMinimumSources(settings.minimumSources);
+      } catch { /* Invalid saved preferences use the defaults. */ }
+    }, 0);
+    return () => clearTimeout(restore);
+  }, []);
+  const updateCitationMinimums = (footnotes: number, works: number) => {
+    setMinimumFootnotes(footnotes);
+    setMinimumSources(works);
+    try { localStorage.setItem("essaywriter:citation-minimums", JSON.stringify({ minimumFootnotes: footnotes, minimumSources: works })); } catch { /* Preferences still apply for this session. */ }
+  };
   const [instructionText, setInstructionText] = useState("");
   const [mode, setMode] = useState<"staged" | "one-shot">("staged");
 
@@ -186,7 +203,7 @@ export default function StudioPage() {
         topic: topic.trim(),
         structureJson: JSON.stringify(structure),
         projectId: projectId ?? undefined,
-        needed: 12,
+        needed: 18,
       });
       applySources(data);
     } catch (err) {
@@ -204,6 +221,8 @@ export default function StudioPage() {
     setDraftBusy(true);
     try {
       const data = await postJSON<DraftResult & { error?: string }>("/api/draft", {
+        minimumFootnotes,
+        minimumSources,
         topic: topic.trim(),
         instructionText: instructionText.trim(),
         extraInstructions: "",
@@ -226,7 +245,7 @@ export default function StudioPage() {
       inflight.current.draft = false;
       setDraftBusy(false);
     }
-  }, [structure, sources, topic, instructionText, wordTarget, projectId, draftBusy]);
+  }, [structure, sources, topic, instructionText, wordTarget, minimumFootnotes, minimumSources, projectId, draftBusy]);
 
   async function runOneShot() {
     if (!validateContext() || outlineBusy || sourcesBusy || draftBusy || inflight.current.oneShot) return;
@@ -259,7 +278,7 @@ export default function StudioPage() {
         topic: topic.trim(),
         structureJson: JSON.stringify(outline.structure),
         projectId: pid,
-        needed: 12,
+        needed: 18,
       });
       setSources(found.sources);
       setLiveSearchUsed(found.liveSearchUsed);
@@ -270,6 +289,8 @@ export default function StudioPage() {
       // Stage 3: draft
       setDraftBusy(true);
       const drafted = await postJSON<DraftResult>("/api/draft", {
+        minimumFootnotes,
+        minimumSources,
         topic: topic.trim(),
         instructionText: instructionText.trim(),
         extraInstructions: "",
@@ -325,8 +346,19 @@ export default function StudioPage() {
     setProjectId(item.id);
     setGlobalError(null);
     if (item.topic) setTopic(item.topic);
+    setInstructionText(item.instruction || "");
     if (item.wordTarget) setWordTarget(Math.min(3000, Math.max(400, item.wordTarget)));
+    if (projectId !== item.id) {
+      setStructure(null);
+      setStructureEdited(false);
+      setOutlineApproved(false);
+      setSources([]);
+      setSourcesApproved(false);
+      setLiveSearchUsed(false);
+      setLiveHits(0);
+    }
     setVersions((prev) => {
+      if (projectId !== item.id) prev = [];
       if (prev.some((v) => v.id === latest.id)) return prev;
       return [
         ...prev,
@@ -446,6 +478,10 @@ export default function StudioPage() {
             }}
             wordTarget={wordTarget}
             onWordTargetChange={setWordTarget}
+            minimumFootnotes={minimumFootnotes}
+            minimumSources={minimumSources}
+            onMinimumFootnotesChange={(value) => updateCitationMinimums(value, minimumSources)}
+            onMinimumSourcesChange={(value) => updateCitationMinimums(minimumFootnotes, value)}
             instructionText={instructionText}
             onInstructionChange={(v) => {
               setInstructionText(v);
@@ -538,6 +574,8 @@ export default function StudioPage() {
         />
 
         <PreviewPanel
+          minimumFootnotes={minimumFootnotes}
+          minimumSources={minimumSources}
           entry={selectedEntry}
           versions={versions}
           onSelectVersion={setSelectedVersionId}

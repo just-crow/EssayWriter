@@ -14,7 +14,7 @@ const Body = z.object({
   topic: z.string().min(1).max(500),
   structureJson: z.string().min(2).max(30000),
   projectId: z.string().nullish(),
-  needed: z.number().int().min(3).max(30).default(12),
+  needed: z.number().int().min(3).max(30).default(18),
 });
 
 type SourcesInput = z.infer<typeof Body>;

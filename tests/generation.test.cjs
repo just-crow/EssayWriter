@@ -2,10 +2,22 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { z } = require("zod");
 const { parseModelJson, completeJson, nimChatLong, nimClient } = require("../lib/nim.ts");
-const { DraftSchema } = require("../lib/essay-types.ts");
+const { DraftSchema, writerDraftSchema } = require("../lib/essay-types.ts");
 const { prepareDraft, verifyEvidence, sourcesTextMap, expandFootnoteUses, repairEvidenceQuotes, splitSentences } = require("../lib/validate.ts");
 const { buildDocx } = require("../lib/docx-build.ts");
 const JSZip = require("jszip");
+
+test("essay word count excludes headings and citation markers", () => {
+  const { countWords } = require('../lib/docx-build.ts');
+  assert.equal(countWords(draft({ introduction: ['One two.[^1]'], sections: [{ heading: 'A long heading excluded from the count', paragraphs: ['Three [^2] four.'] }], conclusion: ['Five.'] })), 5);
+});
+
+test("word-count padding by recycled source sentences is rejected despite different citations", () => {
+  const { assertNoRepeatedSentences } = require("../lib/validate.ts");
+  const sentence = "The course introduces mathematical proofs through logic, sets, functions, induction, and combinatorics for incoming computing students.";
+  assert.throws(() => assertNoRepeatedSentences(draft({ introduction: [sentence + "[^1]"], sections: [{ heading: "Body", paragraphs: [sentence + "[^2]"] }], conclusion: [sentence + "[^3]"] })), /repeats substantial sentences/);
+  assert.doesNotThrow(() => assertNoRepeatedSentences(draft({ introduction: [sentence], conclusion: ["This proposal should be evaluated through a pilot before drawing conclusions about learning outcomes."] })));
+});
 
 const url = "https://example.org/source";
 const text = "A verified passage about the topic with sufficient detail.";
@@ -33,6 +45,10 @@ test("sentence splitting preserves decimal percentages and citation markers", ()
   assert.deepEqual(splitSentences("A 76.5% share was observed.[^1] Next result."), [
     "A 76.5% share was observed.[^1]",
     "Next result.",
+  ]);
+  assert.deepEqual(splitSentences("In the U.S., 68.4% participated.[^2] Dr. Lee reported this."), [
+    "In the U.S., 68.4% participated.[^2]",
+    "Dr. Lee reported this.",
   ]);
 });
 
@@ -163,6 +179,62 @@ test("citation and JSON failures retry with actionable correction feedback", asy
   await assert.rejects(() => completeJson({ system: "JSON", user: "JSON", schema: z.object({ name: z.string() }) }, async () => '{"name":42}'), /invalid fields: name/);
 });
 
+test("provider citation grammar allows full paragraphs and requires structured fields", async () => {
+  let request;
+  const schema = writerDraftSchema();
+  await completeJson({ system: "Write", user: "Write", schema }, async (params) => {
+    request = params;
+    return JSON.stringify(draft({ introduction: ["Opening.[^1]"], sections: [{ heading: "Body", paragraphs: ["Finding.[^1]"] }], conclusion: ["Conclusion.[^1]"] }));
+  });
+  const format = request.responseFormat;
+  assert.equal(format.type, "json_schema");
+  const json = format.json_schema.schema;
+  const pattern = json.properties.introduction.items.pattern;
+  assert.ok(new RegExp(`^(?:${pattern})$`).test("A complete factual sentence.[^1] Analysis follows."));
+  assert.ok(!new RegExp(pattern).test("An uncited paragraph."));
+  assert.ok(json.required.includes("sections"));
+  assert.equal(json.properties.sections.items.additionalProperties, false);
+});
+
+test("writer sentence arrays and single paragraphs normalize without losing citations", () => {
+  const normalized = writerDraftSchema().parse({
+    title:"Course", introduction:"Intro.[^1]", conclusion:[["Closing.[^1]","A recommendation follows."]],
+    sections:[{heading:"Evidence",paragraphs:[["A source finding.[^1]","Its interpretation follows."]]}],
+    footnotes:{malformed:"model metadata is ignored in initial drafts"}, worksCited:42, evidence:"invented",
+  });
+  assert.deepEqual(normalized.introduction,["Intro.[^1]"]);
+  assert.deepEqual(normalized.sections[0].paragraphs,["A source finding.[^1] Its interpretation follows."]);
+  assert.deepEqual(normalized.conclusion,["Closing.[^1] A recommendation follows."]);
+  assert.deepEqual(normalized.footnotes,[]);
+});
+
+test("domain repairs start from verified prose rather than restoring removed claims", async () => {
+  let attempt = 0;
+  const result = await completeJson({
+    system: "Source first", user: "Write", schema: z.object({ sentences: z.array(z.string()) }),
+    repairResponse: JSON.stringify,
+    validate: (value) => {
+      value.sentences = value.sentences.filter((text) => text !== "invented claim");
+      if (value.sentences.length < 2) throw new Error("Expand the verified explanation.");
+    },
+  }, async (request) => {
+    if (++attempt === 1) return JSON.stringify({sentences:["verified finding","invented claim"]});
+    const prior = request.user.split("PREVIOUS RESPONSE:\n")[1].split("\n\nReturn")[0];
+    assert.deepEqual(JSON.parse(prior).sentences, ["verified finding"]);
+    return JSON.stringify({sentences:["verified finding","source-based analysis"]});
+  });
+  assert.equal(result.sentences.length, 2);
+});
+
+test("exhausted service retries are not multiplied by JSON repair attempts", async () => {
+  let calls = 0;
+  await assert.rejects(() => completeJson({ system:"JSON", user:"JSON", schema:z.object({ok:z.boolean()}), parseTries:3 }, async () => {
+    calls++;
+    throw new Error("Service temporarily overloaded");
+  }), /Model service error.*overloaded/);
+  assert.equal(calls,1);
+});
+
 test("streaming honors reasoning toggle, retry options and rejects truncated output", async () => {
   process.env.NVIDIA_NIM_API_KEY = "test-only";
   const client = nimClient();
@@ -181,6 +253,9 @@ test("streaming honors reasoning toggle, retry options and rejects truncated out
     assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false });
     assert.equal(body.reasoning_effort, "none");
     assert.deepEqual(attempts, [1]);
+    await nimChatLong({ system: "JSON", user: "JSON", thinking: true, lowEffort: true, reasoningBudget: 4096, tries: 1 });
+    assert.deepEqual(body.chat_template_kwargs, { enable_thinking: true, low_effort: true, reasoning_budget: 4096 });
+    assert.equal(body.reasoning_effort, undefined);
     client.chat.completions.create = async () => (async function* () {
       yield { choices: [{ delta: { content: '{"incomplete":' }, finish_reason: "length" }] };
     })();

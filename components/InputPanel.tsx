@@ -8,6 +8,10 @@ interface InputPanelProps {
   onTopicChange: (v: string) => void;
   wordTarget: number;
   onWordTargetChange: (v: number) => void;
+  minimumFootnotes: number;
+  minimumSources: number;
+  onMinimumFootnotesChange: (v: number) => void;
+  onMinimumSourcesChange: (v: number) => void;
   instructionText: string;
   onInstructionChange: (v: string) => void;
   mode: StudioMode;
@@ -290,6 +294,20 @@ export default function InputPanel(props: InputPanelProps) {
       </div>
 
       {/* Context upload */}
+      {[
+        { id: "minimum-footnotes", label: "Minimum footnotes", value: props.minimumFootnotes, max: 30, change: props.onMinimumFootnotesChange, help: "At least this many footnotes after consecutive same-source citations are grouped. A work can be cited in separate passages." },
+        { id: "minimum-sources", label: "Minimum cited works", value: props.minimumSources, max: 18, change: props.onMinimumSourcesChange, help: "Different source works, not repeated footnotes to the same work. Every citation must support a real claim." },
+      ].map((setting) => (
+        <div key={setting.id}>
+          <label htmlFor={setting.id} className="mb-1 block text-sm font-semibold text-stone-900">{setting.label}</label>
+          <div className="flex items-center gap-3">
+            <input id={setting.id} type="range" min={1} max={setting.max} step={1} value={setting.value} disabled={busy} onChange={(event) => setting.change(Number(event.target.value))} aria-describedby={`${setting.id}-help`} className="w-full accent-emerald-800" />
+            <output htmlFor={setting.id} className="w-20 shrink-0 rounded-md bg-stone-200/70 px-2 py-1 text-center text-sm font-bold text-stone-900">{setting.value}</output>
+          </div>
+          <p id={`${setting.id}-help`} className="mt-1 text-xs leading-5 text-stone-600">{setting.help}</p>
+        </div>
+      ))}
+
       <div>
         <label htmlFor="is-file" className="mb-1 block text-sm font-semibold text-stone-900">
           Files and pictures
