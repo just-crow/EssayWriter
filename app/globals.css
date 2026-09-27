@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -30,6 +32,10 @@ body {
   color-scheme: light;
 }
 
+.dark .essay-studio {
+  color-scheme: dark;
+}
+
 /* .docx preview: paper pages on a stone desk */
 .docx-preview-wrap {
   overflow-x: auto;
@@ -40,6 +46,11 @@ body {
   border: 1px solid #d6d0c9;
 }
 
+.dark .docx-preview-wrap {
+  background: #1c1917;
+  border-color: #292524;
+}
+
 .docx-preview-wrap .docx-wrapper {
   background: transparent !important;
   padding: 0 !important;
@@ -48,9 +59,17 @@ body {
 .docx-preview-wrap section.docx {
   margin: 0 auto 16px !important;
   border-radius: 2px;
+  background: #ffffff !important;
+  color: #171717 !important;
   box-shadow:
     0 1px 2px rgb(0 0 0 / 0.14),
     0 8px 28px rgb(0 0 0 / 0.12);
+}
+
+.dark .docx-preview-wrap section.docx {
+  box-shadow:
+    0 2px 6px rgb(0 0 0 / 0.4),
+    0 12px 36px rgb(0 0 0 / 0.5);
 }
 
 .docx-preview-wrap section.docx:last-child {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLanguage } from "./LanguageContext";
 
 type PreviewStatus = "idle" | "loading" | "ready" | "error";
 
@@ -26,6 +27,7 @@ export default function DocxPaper({
   onExpand,
   enableMarkerJump = true,
 }: DocxPaperProps) {
+  const { t } = useLanguage();
   const containerRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const [renderResult, setRenderResult] = useState<{ blob: Blob; status: PreviewStatus; error: string | null } | null>(null);
@@ -95,8 +97,8 @@ export default function DocxPaper({
     const outer = outerRef.current;
     if (!outer || status !== "ready") return;
     const onClick = (e: MouseEvent) => {
-      const t = e.target as HTMLElement | null;
-      const ref = t?.closest?.(".docx_footnotereference");
+      const tElem = e.target as HTMLElement | null;
+      const ref = tElem?.closest?.(".docx_footnotereference");
       if (!ref) return;
       const id = (ref.textContent ?? "").trim();
       if (!id) return;
@@ -111,38 +113,38 @@ export default function DocxPaper({
   return (
     <div className="min-w-0">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-sm font-bold text-stone-900">Page preview</p>
+        <p className="text-sm font-bold text-stone-900 dark:text-stone-100">{t("pagePreviewHeading")}</p>
         {blob && status !== "error" ? (
           <div className="flex items-center gap-1.5">
             <div
               role="group"
               aria-label="Preview zoom"
-              className="flex overflow-hidden rounded-md border border-stone-300 text-xs font-semibold"
+              className="flex overflow-hidden rounded-md border border-stone-300 text-xs font-semibold dark:border-stone-700"
             >
               <button
                 type="button"
                 onClick={() => setFitMode(true)}
                 aria-pressed={fitMode}
-                className={`px-2.5 py-1 transition ${fitMode ? "bg-emerald-800 text-white" : "bg-white text-stone-600 hover:bg-stone-100"}`}
+                className={`px-2.5 py-1 transition ${fitMode ? "bg-emerald-800 text-white dark:bg-emerald-700" : "bg-white text-stone-600 hover:bg-stone-100 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700"}`}
               >
-                Fit
+                {t("previewFit")}
               </button>
               <button
                 type="button"
                 onClick={() => setFitMode(false)}
                 aria-pressed={!fitMode}
-                className={`px-2.5 py-1 transition ${!fitMode ? "bg-emerald-800 text-white" : "bg-white text-stone-600 hover:bg-stone-100"}`}
+                className={`px-2.5 py-1 transition ${!fitMode ? "bg-emerald-800 text-white dark:bg-emerald-700" : "bg-white text-stone-600 hover:bg-stone-100 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700"}`}
               >
-                100%
+                {t("previewActual")}
               </button>
             </div>
             {onExpand ? (
               <button
                 type="button"
                 onClick={onExpand}
-                className="inline-flex items-center gap-1 rounded-md border border-stone-300 bg-white px-2.5 py-1 text-xs font-semibold text-stone-700 shadow-sm transition hover:border-emerald-700 hover:text-emerald-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 active:scale-[0.98]"
+                className="inline-flex items-center gap-1 rounded-md border border-stone-300 bg-white px-2.5 py-1 text-xs font-semibold text-stone-700 shadow-sm transition hover:border-emerald-700 hover:text-emerald-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 active:scale-[0.98] dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:border-emerald-500 dark:hover:text-emerald-300"
               >
-                <span aria-hidden="true">⤢</span> Expand
+                <span aria-hidden="true">⤢</span> {t("previewExpand")}
               </button>
             ) : null}
           </div>
@@ -151,24 +153,23 @@ export default function DocxPaper({
 
       {draftBusy && !blob ? (
         <div>
-          <div className="h-5 w-2/3 animate-pulse rounded bg-stone-200" />
+          <div className="h-5 w-2/3 animate-pulse rounded bg-stone-200 dark:bg-stone-700" />
           <div className="mt-4 space-y-2">
             {Array.from({ length: 8 }).map((_, i) => (
               <div
                 key={i}
-                className="h-3 animate-pulse rounded bg-stone-200"
+                className="h-3 animate-pulse rounded bg-stone-200 dark:bg-stone-700"
                 style={{ width: `${94 - (i % 4) * 9}%` }}
               />
             ))}
           </div>
-          <p className="mt-3 text-xs text-stone-600">Drafting your essay…</p>
+          <p className="mt-3 text-xs text-stone-600 dark:text-stone-400">{t("draftingEssayPaper")}</p>
         </div>
       ) : !blob ? (
-        <div className="rounded-lg border border-dashed border-stone-300 bg-stone-50 px-4 py-10 text-center">
-          <p className="font-serif text-lg text-stone-800">A blank page, for now.</p>
-          <p className="mx-auto mt-1 max-w-xs text-xs leading-5 text-stone-600">
-            Work through the context, outline, and sources. Your finished essay will be set here like a printed
-            page.
+        <div className="rounded-lg border border-dashed border-stone-300 bg-stone-50 px-4 py-10 text-center dark:border-stone-800 dark:bg-stone-900/40">
+          <p className="font-serif text-lg text-stone-800 dark:text-stone-200">{t("blankPaperTitle")}</p>
+          <p className="mx-auto mt-1 max-w-xs text-xs leading-5 text-stone-600 dark:text-stone-400">
+            {t("blankPaperHint")}
           </p>
         </div>
       ) : (
@@ -199,16 +200,16 @@ export default function DocxPaper({
           </div>
           {status === "loading" ? (
             <div aria-hidden="true" className="space-y-2 pt-2">
-              <div className="h-5 w-1/2 animate-pulse rounded bg-stone-200" />
-              <div className="h-3 w-full animate-pulse rounded bg-stone-200" />
-              <div className="h-3 w-11/12 animate-pulse rounded bg-stone-200" />
-              <div className="h-3 w-4/5 animate-pulse rounded bg-stone-200" />
+              <div className="h-5 w-1/2 animate-pulse rounded bg-stone-200 dark:bg-stone-700" />
+              <div className="h-3 w-full animate-pulse rounded bg-stone-200 dark:bg-stone-700" />
+              <div className="h-3 w-11/12 animate-pulse rounded bg-stone-200 dark:bg-stone-700" />
+              <div className="h-3 w-4/5 animate-pulse rounded bg-stone-200 dark:bg-stone-700" />
             </div>
           ) : null}
           {status === "error" ? (
             <>
-              <p className="mb-1 rounded-md bg-amber-100 px-3 py-2 font-sans text-xs font-medium text-amber-900">
-                Page preview failed ({previewError}), showing text instead. Download still works.
+              <p className="mb-1 rounded-md bg-amber-100 px-3 py-2 font-sans text-xs font-medium text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+                {t("previewErrorFallback", { error: previewError || "" })}
               </p>
               {fallback}
             </>

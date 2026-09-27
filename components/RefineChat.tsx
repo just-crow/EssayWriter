@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { DraftResult } from "./studio-types";
+import { useLanguage } from "./LanguageContext";
 
 interface RefineChatProps {
   minimumFootnotes: number;
@@ -19,6 +20,7 @@ interface ChatLine {
 }
 
 export default function RefineChat({ projectId, versionId, version, disabled, onRefined, minimumFootnotes, minimumSources }: RefineChatProps) {
+  const { t } = useLanguage();
   const [instruction, setInstruction] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,11 +29,11 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
   async function send() {
     const text = instruction.trim();
     if (!text) {
-      setError("Describe the change first.");
+      setError(t("refineErrorEmpty"));
       return;
     }
     if (!projectId) {
-      setError("Draft an essay before refining it.");
+      setError(t("refineErrorNoProject"));
       return;
     }
     setError(null);
@@ -55,7 +57,7 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
     } catch (err) {
       const message = err instanceof Error ? err.message : "Refine failed.";
       setError(message);
-      setLog((prev) => [...prev, { role: "assistant", text: `Could not apply that change: ${message}` }]);
+      setLog((prev) => [...prev, { role: "assistant", text: t("refineErrorMessage", { message }) }]);
     } finally {
       setBusy(false);
     }
@@ -64,14 +66,14 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
   return (
     <div>
       {log.length > 0 ? (
-        <ul aria-live="polite" className="mb-3 flex max-h-44 flex-col gap-2 overflow-y-auto rounded-lg bg-stone-100 p-3">
+        <ul aria-live="polite" className="mb-3 flex max-h-44 flex-col gap-2 overflow-y-auto rounded-lg bg-stone-100 p-3 dark:bg-stone-800/60">
           {log.map((line, i) => (
             <li
               key={i}
               className={`max-w-[92%] rounded-lg px-3 py-1.5 text-xs leading-5 ${
                 line.role === "user"
-                  ? "self-end bg-emerald-800 text-white"
-                  : "self-start border border-stone-200 bg-white text-stone-800"
+                  ? "self-end bg-emerald-800 text-white dark:bg-emerald-700"
+                  : "self-start border border-stone-200 bg-white text-stone-800 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-200"
               }`}
             >
               {line.text}
@@ -80,8 +82,8 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
         </ul>
       ) : null}
 
-      <label htmlFor="refine-input" className="mb-1 block text-sm font-semibold text-stone-900">
-        Refine draft{version ? ` (revising v${version})` : ""}
+      <label htmlFor="refine-input" className="mb-1 block text-sm font-semibold text-stone-900 dark:text-stone-100">
+        {t("refineDraftLabel")}{version ? ` ${t("refiningVersion", { version })}` : ""}
       </label>
       <textarea
         id="refine-input"
@@ -90,16 +92,16 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
         rows={3}
         disabled={disabled || busy}
         placeholder={
-          disabled ? "Your draft will appear above — then ask for changes here…" : "e.g. Add a paragraph on X — new sources are fetched automatically…"
+          disabled ? t("refinePlaceholderDisabled") : t("refinePlaceholderActive")
         }
         aria-describedby="refine-help"
-        className="w-full resize-y rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm leading-6 text-stone-900 shadow-sm transition placeholder:text-stone-400 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-500"
+        className="w-full resize-y rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm leading-6 text-stone-900 shadow-sm transition placeholder:text-stone-400 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-500 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-100 dark:placeholder:text-stone-500 dark:disabled:bg-stone-800/50 dark:disabled:text-stone-500 dark:focus:border-emerald-500"
       />
-        <p id="refine-help" className="mt-1 text-xs leading-5 text-stone-600">
-          Each revision saves a new version. Ask for new content freely — fresh sources are gathered when needed.
-        </p>
+      <p id="refine-help" className="mt-1 text-xs leading-5 text-stone-600 dark:text-stone-400">
+        {t("refineHelp")}
+      </p>
       {error ? (
-        <p role="alert" className="mt-1 text-xs font-medium text-red-800">
+        <p role="alert" className="mt-1 text-xs font-medium text-red-800 dark:text-red-400">
           {error}
         </p>
       ) : null}
@@ -107,9 +109,9 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
         type="button"
         onClick={send}
         disabled={disabled || busy || instruction.trim().length === 0}
-        className="mt-2 inline-flex items-center justify-center rounded-lg bg-emerald-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-stone-300 disabled:text-stone-500"
+        className="mt-2 inline-flex items-center justify-center rounded-lg bg-emerald-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-stone-300 disabled:text-stone-500 dark:bg-emerald-700 dark:hover:bg-emerald-600 dark:disabled:bg-stone-800 dark:disabled:text-stone-500"
       >
-        {busy ? "Revising…" : "Send"}
+        {busy ? t("revisingButton") : t("sendButton")}
       </button>
     </div>
   );

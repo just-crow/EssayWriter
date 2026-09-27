@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import InputPanel from "@/components/InputPanel";
 import PipelinePanel from "@/components/PipelinePanel";
 import PreviewPanel from "@/components/PreviewPanel";
+import LanguageSwitch from "@/components/LanguageSwitch";
+import ThemeSwitch from "@/components/ThemeSwitch";
+import { useLanguage } from "@/components/LanguageContext";
 import {
   toVersionEntry,
   type DraftResult,
@@ -42,6 +45,8 @@ function useElapsed(active: boolean): number {
 }
 
 export default function StudioPage() {
+  const { t } = useLanguage();
+
   // Context state
   const [topic, setTopic] = useState("");
   const [wordTarget, setWordTarget] = useState(1200);
@@ -107,13 +112,13 @@ export default function StudioPage() {
           if (!res.ok) throw new Error("History unavailable.");
           setHistory(data.projects ?? []);
         } catch {
-          setHistoryNote("Recent essays are unavailable right now.");
+          setHistoryNote(t("historyUnavailable"));
         }
       })();
     } catch {
       // The initial empty history already handles malformed local storage.
     }
-  }, []);
+  }, [t]);
 
   // Remember every project this browser creates for future history lookups.
   useEffect(() => {
@@ -137,11 +142,11 @@ export default function StudioPage() {
   const latestIssues: ValidationIssue[] = selectedEntry?.issues ?? [];
   const coverage = selectedEntry?.draft?.coverage ?? [];
   const projectTitle =
-    selectedEntry?.draft?.title || selectedEntry?.title || topic.trim() || "Untitled essay";
+    selectedEntry?.draft?.title || selectedEntry?.title || topic.trim() || t("untitledEssay");
 
   function validateContext(): boolean {
     if (!topic.trim()) {
-      setTopicError("Add an essay topic first.");
+      setTopicError(t("topicErrorRequired"));
       return false;
     }
     setTopicError(null);
@@ -167,13 +172,13 @@ export default function StudioPage() {
       setStructureEdited(false);
       setOutlineApproved(false);
     } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "Outline failed.");
+      setGlobalError(err instanceof Error ? err.message : t("outlineFailed"));
     } finally {
       inflight.current.outline = false;
       setOutlineBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topic, instructionText, wordTarget, projectId, outlineBusy]);
+  }, [topic, instructionText, wordTarget, projectId, outlineBusy, t]);
 
   /** Shared apply step for both source-response shapes:
    * { jobId } -> poll to completion; { sources, ... } -> already final
@@ -207,12 +212,12 @@ export default function StudioPage() {
       });
       applySources(data);
     } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "Sources failed.");
+      setGlobalError(err instanceof Error ? err.message : t("sourcesFailed"));
     } finally {
       inflight.current.sources = false;
       setSourcesBusy(false);
     }
-  }, [structure, topic, projectId, sourcesBusy]);
+  }, [structure, topic, projectId, sourcesBusy, t]);
 
   const draftEssay = useCallback(async () => {
     if (!structure || sources.length === 0 || draftBusy || inflight.current.draft) return;
@@ -240,12 +245,12 @@ export default function StudioPage() {
       setVersions((prev) => [...prev.filter((v) => v.id !== entry.id), entry]);
       setSelectedVersionId(entry.id);
     } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "Draft failed.");
+      setGlobalError(err instanceof Error ? err.message : t("draftFailed"));
     } finally {
       inflight.current.draft = false;
       setDraftBusy(false);
     }
-  }, [structure, sources, topic, instructionText, wordTarget, minimumFootnotes, minimumSources, projectId, draftBusy]);
+  }, [structure, sources, topic, instructionText, wordTarget, minimumFootnotes, minimumSources, projectId, draftBusy, t]);
 
   async function runOneShot() {
     if (!validateContext() || outlineBusy || sourcesBusy || draftBusy || inflight.current.oneShot) return;
@@ -309,7 +314,7 @@ export default function StudioPage() {
       setDraftBusy(false);
       inflight.current.oneShot = false;
     } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "One-shot run failed.");
+      setGlobalError(err instanceof Error ? err.message : t("oneShotFailed"));
       setOutlineBusy(false);
       setSourcesBusy(false);
       setDraftBusy(false);
@@ -380,28 +385,31 @@ export default function StudioPage() {
   }
 
   return (
-    <div className="essay-studio min-h-screen bg-stone-100 font-sans text-stone-900">
+    <div className="essay-studio min-h-screen bg-stone-100 font-sans text-stone-900 transition-colors duration-150 dark:bg-stone-950 dark:text-stone-100">
       {/* Sticky top bar */}
-      <header className="sticky top-0 z-20 border-b border-stone-200 bg-stone-50">
+      <header className="sticky top-0 z-20 border-b border-stone-200 bg-stone-50 transition-colors duration-150 dark:border-stone-800 dark:bg-stone-900/90 dark:backdrop-blur-sm">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
           <div className="flex items-center gap-2.5">
             <span
               aria-hidden="true"
-              className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-800 font-serif text-lg font-bold text-white"
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-800 font-serif text-lg font-bold text-white shadow-sm dark:bg-emerald-700"
             >
               E
             </span>
             <div className="leading-tight">
-              <p className="text-sm font-bold tracking-tight">EssayWriter Studio</p>
-              <p className="max-w-64 truncate text-xs text-stone-600 md:max-w-md" title={projectTitle}>
+              <p className="text-sm font-bold tracking-tight">{t("appTitle")}</p>
+              <p className="max-w-48 sm:max-w-64 md:max-w-md truncate text-xs text-stone-600 dark:text-stone-400" title={projectTitle}>
                 {projectTitle}
               </p>
             </div>
           </div>
 
           <div className="ms-auto flex flex-wrap items-center gap-2">
+            <LanguageSwitch />
+            <ThemeSwitch />
+
             <label htmlFor="history-select" className="sr-only">
-              Open recent essay
+              {t("openRecentSr")}
             </label>
             <select
               id="history-select"
@@ -410,12 +418,12 @@ export default function StudioPage() {
                 if (e.target.value) openHistoryProject(e.target.value);
               }}
               aria-describedby={historyNote ? "history-note" : undefined}
-              className="max-w-52 truncate rounded-lg border border-stone-300 bg-white px-2 py-2 text-xs font-semibold text-stone-700 shadow-sm focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20"
+              className="max-w-36 sm:max-w-52 truncate rounded-lg border border-stone-300 bg-white px-2 py-2 text-xs font-semibold text-stone-700 shadow-sm transition focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-200"
             >
-              <option value="">Open recent…</option>
+              <option value="">{t("openRecent")}</option>
               {history.map((h) => (
                 <option key={h.id} value={h.id}>
-                  {h.title || h.topic || "Untitled"} ({h._count.versions}v)
+                  {h.title || h.topic || t("untitledEssay")} ({h._count.versions}v)
                 </option>
               ))}
             </select>
@@ -423,23 +431,23 @@ export default function StudioPage() {
               <a
                 href={selectedEntry.downloadUrl}
                 download
-                className="inline-flex items-center justify-center rounded-lg bg-emerald-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 focus-visible:ring-offset-2 active:scale-[0.98]"
+                className="inline-flex items-center justify-center rounded-lg bg-emerald-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 focus-visible:ring-offset-2 active:scale-[0.98] dark:bg-emerald-700 dark:hover:bg-emerald-600"
               >
-                Download
+                {t("download")}
               </a>
             ) : (
               <span
                 aria-disabled="true"
-                title="Download appears after the first draft"
-                className="inline-flex cursor-not-allowed items-center justify-center rounded-lg bg-stone-300 px-4 py-2 text-sm font-semibold text-stone-500"
+                title={t("downloadTooltipDisabled")}
+                className="inline-flex cursor-not-allowed items-center justify-center rounded-lg bg-stone-300 px-4 py-2 text-sm font-semibold text-stone-500 dark:bg-stone-800 dark:text-stone-500"
               >
-                Download
+                {t("download")}
               </span>
             )}
           </div>
         </div>
         {historyNote ? (
-          <p id="history-note" className="border-t border-stone-200 px-4 py-1 text-xs text-stone-600">
+          <p id="history-note" className="border-t border-stone-200 px-4 py-1 text-xs text-stone-600 dark:border-stone-800 dark:text-stone-400">
             {historyNote}
           </p>
         ) : null}
@@ -447,16 +455,16 @@ export default function StudioPage() {
 
       {globalError ? (
         <div className="px-4 pt-4" role="alert">
-          <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+          <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/40 dark:bg-red-950/30">
             <div>
-              <p className="text-sm font-bold text-red-900">Something went wrong</p>
-              <p className="mt-0.5 text-sm leading-6 text-red-800">{globalError}</p>
+              <p className="text-sm font-bold text-red-900 dark:text-red-300">{t("somethingWentWrong")}</p>
+              <p className="mt-0.5 text-sm leading-6 text-red-800 dark:text-red-200">{globalError}</p>
             </div>
             <button
               type="button"
               onClick={() => setGlobalError(null)}
-              aria-label="Dismiss error"
-              className="shrink-0 rounded-md px-2 py-1 text-sm font-bold text-red-900 transition hover:bg-red-100 active:scale-[0.98]"
+              aria-label={t("dismissError")}
+              className="shrink-0 rounded-md px-2 py-1 text-sm font-bold text-red-900 transition hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-900/40 active:scale-[0.98]"
             >
               ✕
             </button>
@@ -467,8 +475,8 @@ export default function StudioPage() {
       {/* 3-pane studio */}
       <main className="grid grid-cols-1 items-start gap-4 p-4 xl:grid-cols-[340px_minmax(0,1fr)_460px]">
         <section
-          aria-label="Context input"
-          className="min-w-0 rounded-xl border border-stone-200 bg-stone-50 p-4 shadow-sm"
+          aria-label={t("stepContext")}
+          className="min-w-0 rounded-xl border border-stone-200 bg-stone-50 p-4 shadow-sm transition-colors duration-150 dark:border-stone-800 dark:bg-stone-900/60"
         >
           <InputPanel
             topic={topic}
@@ -586,8 +594,8 @@ export default function StudioPage() {
         />
       </main>
 
-      <footer className="border-t border-stone-200 px-4 py-4 text-center text-xs leading-5 text-stone-600">
-        Outline, sources, and draft stay in sync — approve each stage to unlock the next.
+      <footer className="border-t border-stone-200 px-4 py-4 text-center text-xs leading-5 text-stone-600 transition-colors duration-150 dark:border-stone-800 dark:text-stone-400">
+        {t("footerText")}
       </footer>
     </div>
   );
