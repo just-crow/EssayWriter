@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState, type ChangeEvent } from "react";
-import type { StudioMode } from "./studio-types";
 import { useLanguage } from "./LanguageContext";
 
 interface InputPanelProps {
@@ -15,13 +14,10 @@ interface InputPanelProps {
   onMinimumSourcesChange: (v: number) => void;
   instructionText: string;
   onInstructionChange: (v: string) => void;
-  mode: StudioMode;
-  onModeChange: (m: StudioMode) => void;
   onParsedText: (appendedText: string, note: string) => void;
   onGenerateOutline: () => void;
   onGatherSources: () => void;
   onDraftEssay: () => void;
-  onOneShot: () => void;
   outlineBusy: boolean;
   sourcesBusy: boolean;
   draftBusy: boolean;

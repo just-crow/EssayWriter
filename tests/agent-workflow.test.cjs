@@ -4,30 +4,31 @@ const { cleanSourceTitle, qualityWeight } = require('../lib/search.ts');
 const { assertHeadingNamesCovered } = require('../lib/validate.ts');
 const { cleanEssayVoice } = require('../lib/source-writer.ts');
 
-test('search titles strip PDF prefixes and shouting caps (Malthus sample)', () => {
+test('search titles strip file-dump prefixes and shouting caps', () => {
   assert.equal(
-    cleanSourceTitle('(PDF) A CRITICAL ANALYSIS OF MULTHUSIAN THEORY ....'),
-    'A critical analysis of multhusian theory'
+    cleanSourceTitle('(PDF) A CRITICAL ANALYSIS OF RIVER BASINS ....'),
+    'A critical analysis of river basins'
   );
-  assert.equal(cleanSourceTitle('Malthusian Theory | Varsity Tutors'), 'Malthusian Theory | Varsity Tutors');
+  assert.equal(cleanSourceTitle('River Basins and Flood Control'), 'River Basins and Flood Control');
 });
 
-test('study-guide hosts rank below substantive pages', () => {
-  const guide = { title: 'x', url: 'https://www.tutorchase.com/notes/x', snippet: '', publisher: 'tutorchase.com', date: '', score: 1.0, query: 'q' };
-  const journal = { title: 'y', url: 'https://www.nature.com/articles/y', snippet: '', publisher: 'nature.com', date: '', score: 1.0, query: 'q' };
-  assert.ok(qualityWeight(journal) > qualityWeight(guide));
+test('study-format pages rank below substantive pages on equal footing', () => {
+  const base = { snippet: '', publisher: 'example.com', date: '', score: 1.0, query: 'q' };
+  const guide = { ...base, title: 'River Basins Flashcards', url: 'https://example.com/study-guides/river-basins' };
+  const article = { ...base, title: 'River Basins and Flood Control', url: 'https://example.com/articles/river-basins' };
+  assert.ok(qualityWeight(article) > qualityWeight(guide));
 });
 
-test('heading names must be covered in their section (Simon rule)', () => {
+test('heading promises must be covered in their section', () => {
   const draft = {
     title: 't', introduction: ['i'], conclusion: ['c'], footnotes: [], worksCited: [], evidence: [], coverage: [],
-    sections: [{ heading: 'Alternative Theories: Boserup, Simon, and Ingenuity', paragraphs: ['Boserup argued pressure prompts innovation.'] }],
+    sections: [{ heading: 'Contrasting Views: Smith, Jones, and Adaptation', paragraphs: ['Smith presents one view of adaptation.'] }],
   };
-  assert.throws(() => assertHeadingNamesCovered(draft), /Simon/);
-  draft.sections[0].paragraphs = ['Boserup argued pressure prompts innovation. Simon countered that ingenuity outruns scarcity.'];
+  assert.throws(() => assertHeadingNamesCovered(draft), /Jones/);
+  draft.sections[0].paragraphs = ['Smith presents one view of adaptation. Jones counters that adaptation fails under scarcity.'];
   assertHeadingNamesCovered(draft);
 });
 
 test('essay voice clears audit typographic fallout', () => {
-  assert.equal(cleanEssayVoice('Its claims hold .  Malthus argued growth strains food.[^1]'), 'Its claims hold. Malthus argued growth strains food.[^1]');
+  assert.equal(cleanEssayVoice('Its claims hold .  Rivers shaped the valley.[^1]'), 'Its claims hold. Rivers shaped the valley.[^1]');
 });

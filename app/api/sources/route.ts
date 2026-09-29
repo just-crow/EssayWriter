@@ -145,8 +145,8 @@ export async function runSourcesPipeline(
     ...s,
     content: (texts.get(normalizeUrl(s.url || "")) || snippets.get(normalizeUrl(s.url || "")) || "").trim(),
   }));
-  // Snippet-only pages (weak extracts) produce generic memory-written essays
-  // like the Malthus sample. Require real page text when available.
+  // Snippet-only pages (weak extracts) push the writer toward generic
+  // memory-written prose. Require real page text when available.
   const substantive = sources.filter((s) => s.content.length >= 300);
   if (substantive.length >= MIN_VERIFIED) {
     sources = substantive;

@@ -27,6 +27,13 @@ function yearFrom(date: string): string {
   return m ? m[0] : "";
 }
 
+/** True for long ALL-CAPS titles, which are usually file-dump labels
+ * rather than real article titles. */
+export function isShoutingTitle(raw: string): boolean {
+  const t = (raw || "").trim();
+  return t.length >= 24 && /^[A-Z0-9\s\-–:;,.()&']+$/.test(t) && /[A-Z]{4,}/.test(t);
+}
+
 /** Clean raw search titles: strip (PDF) prefixes, file extensions,
  * excessive punctuation and ALL-CAPS shouting while preserving meaning. */
 export function cleanSourceTitle(raw: string): string {
@@ -35,11 +42,10 @@ export function cleanSourceTitle(raw: string): string {
   t = t.replace(/\.(pdf|docx?|pptx?)\s*$/i, "");
   t = t.replace(/\s*[|·•\-–—]+\s*$/g, "").trim();
   t = t.replace(/\s{2,}/g, " ").replace(/\.{2,}/g, "").trim();
-  // Title-case shouting: "A CRITICAL ANALYSIS OF ..." -> "A critical analysis of ..."
-  // Keep short words/acronyms intact by only fixing long all-caps strings.
-  if (t.length >= 24 && /^[A-Z0-9\s\-–:;,.()&']+$/.test(t) && /[A-Z]{4,}/.test(t)) {
+  // Title-case shouting while preserving meaning.
+  if (isShoutingTitle(t)) {
     const lower = t.toLowerCase();
-    t = lower.replace(/(^|[.!?]\s+|\bafter\b\s+)([a-z])/g, (_m, pre: string, ch: string) => pre + ch.toUpperCase());
+    t = lower.replace(/(^|[.!?]\s+)([a-z])/g, (_m, pre: string, ch: string) => pre + ch.toUpperCase());
     t = t.charAt(0).toUpperCase() + t.slice(1);
   }
   return t || raw.trim();
@@ -168,16 +174,19 @@ export function qualityWeight(w: WebSource): number {
   ) {
     score += 0.4;
   }
-  // Study-guide / tutoring / homework sites are background at best.
-  // Keep them as fallback but never rank them above substantive pages.
+  // Study-format pages (revision notes, flashcards, homework help) are
+  // background at best, whichever site hosts them. Detect by URL and title
+  // format, never by site name, and keep them as fallback below substantive
+  // pages.
+  const title = (w.title || "").toLowerCase();
   if (
-    /tutorchase\.|fiveable\.|varsitytutors\.|coursehero\.|chegg\.|brainly\.|quizlet\.|studocu\.|cliffsnotes\.|sparknotes\.|adulteducation\.quest/.test(host) ||
-    /\/(notes|study-guide|key-terms|practice\/lessons|ap\/human-geography)\//.test(path)
+    /\/(notes?|study-guides?|study_guides?|key-terms?|key_terms?|flashcards?|homework-help?|past-papers?|practice-questions?)\//.test(path) ||
+    /\b(flashcards?|study guides?|key terms?|homework help|past papers?|practice questions?|revision notes?|vocab(ulary)?\s+definitions?)\b/.test(title)
   ) {
     score -= 0.45;
   }
-  // Aggregator PDF dumps with shouting titles are weak evidence.
-  if (/academia\.edu|researchgate\.net/.test(host) && /^\(?\s*pdf/i.test(w.title)) {
+  // Titles that are file-dump labels or ALL-CAPS shouting signal weak evidence.
+  if (/^\(?\s*pdf\s*\)?[\s\-–:|.]/.test(w.title || "") || isShoutingTitle(w.title || "")) {
     score -= 0.15;
   }
   return score;

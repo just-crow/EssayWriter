@@ -69,7 +69,6 @@ export default function StudioPage() {
     try { localStorage.setItem("essaywriter:citation-minimums", JSON.stringify({ minimumFootnotes: footnotes, minimumSources: works })); } catch { /* Preferences still apply for this session. */ }
   };
   const [instructionText, setInstructionText] = useState("");
-  const [mode, setMode] = useState<"staged" | "one-shot">("staged");
 
   // Project state
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -89,7 +88,7 @@ export default function StudioPage() {
   const [draftBusy, setDraftBusy] = useState(false);
   // In-flight locks: state lags a render, so rapid re-clicks would otherwise
   // fire duplicate model requests. Refs guard the actual work.
-  const inflight = useRef({ outline: false, sources: false, draft: false, oneShot: false });
+  const inflight = useRef({ outline: false, sources: false, draft: false });
   const [topicError, setTopicError] = useState<string | null>(null);
   const [instructionError, setInstructionError] = useState<string | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -252,76 +251,6 @@ export default function StudioPage() {
       setDraftBusy(false);
     }
   }, [structure, sources, topic, instructionText, wordTarget, minimumFootnotes, minimumSources, projectId, draftBusy, t]);
-
-  async function runOneShot() {
-    if (!validateContext() || outlineBusy || sourcesBusy || draftBusy || inflight.current.oneShot) return;
-    inflight.current.oneShot = true;
-    setGlobalError(null);
-    try {
-      // Stage 1: outline
-      setOutlineBusy(true);
-      const outline = await postJSON<{ projectId: string; structure: EssayStructure }>("/api/structure", {
-        topic: topic.trim(),
-        instructionText: instructionText.trim(),
-        extraInstructions: "",
-        wordTarget,
-        projectId: projectId ?? undefined,
-      });
-      const pid = outline.projectId;
-      setProjectId(pid);
-      setStructure(outline.structure);
-      setStructureEdited(false);
-      setOutlineApproved(true);
-      setOutlineBusy(false);
-
-      // Stage 2: sources (synchronous, same everywhere)
-      setSourcesBusy(true);
-      const found = await postJSON<{
-        sources: SourceItem[];
-        liveSearchUsed: boolean;
-        liveHits: number;
-      }>("/api/sources", {
-        topic: topic.trim(),
-        structureJson: JSON.stringify(outline.structure),
-        projectId: pid,
-        needed: 18,
-      });
-      setSources(found.sources);
-      setLiveSearchUsed(found.liveSearchUsed);
-      setLiveHits(found.liveHits);
-      setSourcesApproved(true);
-      setSourcesBusy(false);
-
-      // Stage 3: draft
-      setDraftBusy(true);
-      const drafted = await postJSON<DraftResult>("/api/draft", {
-        minimumFootnotes,
-        minimumSources,
-        topic: topic.trim(),
-        instructionText: instructionText.trim(),
-        extraInstructions: "",
-        wordTarget,
-        structureJson: JSON.stringify(outline.structure),
-        sourcesJson: JSON.stringify(found.sources),
-        projectId: pid,
-      });
-      const result: DraftResult = {
-        ...drafted,
-        worksCitedCount: drafted.worksCitedCount ?? drafted.draft.worksCited.length,
-      };
-      const entry = toVersionEntry(result);
-      setVersions((prev) => [...prev.filter((v) => v.id !== entry.id), entry]);
-      setSelectedVersionId(entry.id);
-      setDraftBusy(false);
-      inflight.current.oneShot = false;
-    } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : t("oneShotFailed"));
-      setOutlineBusy(false);
-      setSourcesBusy(false);
-      setDraftBusy(false);
-      inflight.current.oneShot = false;
-    }
-  }
 
   function handleRefined(result: DraftResult) {
     const entry = toVersionEntry(result);
@@ -496,15 +425,12 @@ export default function StudioPage() {
               setInstructionText(v);
               if (v.trim()) setInstructionError(null);
             }}
-            mode={mode}
-            onModeChange={setMode}
             onParsedText={(appended) =>
               setInstructionText((prev) => (prev ? `${prev}\n\n${appended}` : appended))
             }
             onGenerateOutline={generateOutline}
             onGatherSources={gatherSources}
             onDraftEssay={draftEssay}
-            onOneShot={runOneShot}
             outlineBusy={outlineBusy}
             sourcesBusy={sourcesBusy}
             draftBusy={draftBusy}

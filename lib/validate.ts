@@ -253,27 +253,45 @@ export function assertStructureUsable(s: EssayStructure): void {
   }
 }
 
-/** Generic section words that are not promises about content. */
-const HEADING_STOP = new Set(
-  "theory relevance modern world evidence historical contemporary contexts context challenges challenge technological innovation innovations agricultural advancement advances alternative theories theory role human ingenuity synthesis assessing assessment core principles predictions supporting concerns concern review overview analysis evaluation impact effects study discussion debate today relevance contemporary historical".split(" ")
+/** Small generic function-word set for heading analysis. Plain English,
+ * unrelated to any subject or field. */
+const HEADING_FUNCTION_WORDS = new Set(
+  "a an the and or of to in on for with versus vs via per among between through during".split(" ")
 );
 
-/** Every capitalized name in a heading (Boserup, Simon, Malthus) must be
- * discussed in that section's paragraphs. Catches heading promises the
- * body never keeps, like the Malthus sample naming Simon in a heading
- * but omitting him from the text. Throws a retryable error. */
+/** Minimal stemmer so adjectival and plural heading forms match body text
+ * (e.g. a heading adjective matches its base noun in the paragraphs). */
+function headingStem(word: string): string {
+  let w = word.toLowerCase();
+  if (w.endsWith("ies") && w.length > 4) w = w.slice(0, -3) + "y";
+  else if (w.endsWith("s") && !w.endsWith("ss") && w.length > 4) w = w.slice(0, -1);
+  for (const suffix of ["ical", "ian", "ean", "ist", "ism"]) {
+    if (w.endsWith(suffix) && w.length - suffix.length >= 4) { w = w.slice(0, -suffix.length); break; }
+  }
+  return w;
+}
+
+/** Every substantive capitalized word in a heading is a promise about that
+ * section's content (a name, theory, place, or case). The opening token is
+ * skipped because headings conventionally start capitalized regardless of
+ * meaning. Matching is case-insensitive against the section body, with
+ * light stemming for plurals and adjectives. Throws a retryable error
+ * listing the uncovered terms. */
 export function assertHeadingNamesCovered(draft: EssayDraft): void {
   for (const section of draft.sections) {
     const heading = section.heading || "";
-    const names = [...heading.matchAll(/\b([A-Z][a-z]{3,})\b/g)]
-      .map((m) => m[1])
-      .filter((w) => !HEADING_STOP.has(w.toLowerCase()));
+    const tokens = [...heading.matchAll(/\b([A-Za-z][a-z]{3,})\b/g)].map((m) => m[1]);
+    // Skip the opening token: its capitalization carries no meaning.
+    const names = tokens.slice(1).filter((t) => !HEADING_FUNCTION_WORDS.has(t.toLowerCase()));
     if (names.length === 0) continue;
     const body = section.paragraphs.join(" ").toLowerCase();
-    const missing = names.filter((n) => !body.includes(n.toLowerCase()));
+    const missing = names.filter((n) => {
+      const lower = n.toLowerCase();
+      return !body.includes(lower) && !body.includes(headingStem(n));
+    });
     if (missing.length > 0) {
       throw new Error(
-        `The section “${heading}” promises ${missing.join(", ")} but never discusses them. Cover each named person or theory in that section with evidence, or remove the name from the heading.`
+        `The section “${heading}” promises ${missing.join(", ")} but never discusses them. Cover each named item in that section with evidence, or remove the name from the heading.`
       );
     }
   }

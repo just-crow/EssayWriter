@@ -42,7 +42,11 @@ export function sourceQualityFactor(source: SourceItem): number {
     : source.kind === "academic" || /\.edu$|(?:frontiersin\.org|springer\.com|sciencedirect\.com|plos\.org|wiley\.com|nature\.com)$/.test(host) ? 1.18
     : 1;
   if (/(?:^|\/)(?:category|tag|topics|search)(?:\/|$)/.test(path)) factor *= 0.6;
-  if (/tutorchase\.|fiveable\.|varsitytutors\.|studocu\.|cliffsnotes\.|sparknotes\.|adulteducation\.quest/.test(host)) factor *= 0.6;
+  // Study-format pages rank below substantive pages, detected by URL and
+  // title format rather than by site name.
+  const title = (source.title || "").toLowerCase();
+  if (/\/(notes?|study-guides?|study_guides?|key-terms?|key_terms?|flashcards?|homework-help?|past-papers?|practice-questions?)\//.test(path) ||
+    /\b(flashcards?|study guides?|key terms?|homework help|past papers?|practice questions?|revision notes?)\b/.test(title)) factor *= 0.6;
   return factor;
 }
 

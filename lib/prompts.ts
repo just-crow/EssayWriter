@@ -17,7 +17,7 @@ You are an academic essay writer. Follow the user's topic, educational level, es
 10. CONCLUSION: no footnotes or citations. Restate the thesis and synthesize only points already established in the introduction and body. Introduce no new facts, evidence, statistics, examples, arguments, or recommendations. Do not use the conclusion to reach citation minimums. The conclusion must use fresh wording, never copy introduction sentences.
 11. When returning JSON: raw object only, no markdown fences, no trailing commas, no comments. Escape every double quote and backslash inside strings.
 12. Every paragraph must answer its own outline point and belong under its section heading. State a clear point, develop relevant evidence, and explain its significance. When the task asks for evaluation, weigh supported benefits and limitations and give a qualified judgment with a reason. Do not substitute scientific background for ethical, social, economic, or political evaluation. Do not describe publications with phrases such as This review explores or This paper focuses. Identify a subject before using this approach or this technology. Retain the earlier paragraphs as context and advance the argument rather than restart it.
-13. HEADING HONESTY: every person, theory, or case named in a section heading MUST be discussed in that section's paragraphs with a citation. Never promise Boserup, Simon, or any name in a heading and then omit them.
+13. HEADING HONESTY: every person, theory, or case named in a section heading MUST be discussed in that section's paragraphs with a citation. Never name anyone or anything in a heading and then omit it from the text.
 `.trim();
 
 /** Argument guidance applies to every subject and essay length. The outline
