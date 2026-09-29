@@ -18,7 +18,12 @@ export function cleanEssayVoice(paragraph: string): string {
     .replace(/(\[\^\d+\]|[.!?])\s+\)\s+(?=[A-Z])/g, "$1 ")
     .replace(/(^|[.!?]\s+)(?:Moreover|Furthermore|Additionally),?\s+([a-z])/g, (_, before: string, next: string) => before + next.toUpperCase())
     .replace(/\b(?:the )?assigned findings?\b/gi, match => /^[A-Z]/.test(match) ? "The available evidence" : "the available evidence")
-    .replace(/\bavailable evidence do not\b/gi, "available evidence does not");
+    .replace(/\bavailable evidence do not\b/gi, "available evidence does not")
+    // Typographic fallout from audits and repairs (seen in Malthus sample).
+    .replace(/\s+([.,!?])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\bThis (view|framework|interpretation|account) makes .*? relevant as\b/gi, "This suggests")
+    .trim();
 }
 
 /** Compose independently assigned source findings, never an essay from memory. */

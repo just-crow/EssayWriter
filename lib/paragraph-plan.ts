@@ -42,6 +42,7 @@ export function sourceQualityFactor(source: SourceItem): number {
     : source.kind === "academic" || /\.edu$|(?:frontiersin\.org|springer\.com|sciencedirect\.com|plos\.org|wiley\.com|nature\.com)$/.test(host) ? 1.18
     : 1;
   if (/(?:^|\/)(?:category|tag|topics|search)(?:\/|$)/.test(path)) factor *= 0.6;
+  if (/tutorchase\.|fiveable\.|varsitytutors\.|studocu\.|cliffsnotes\.|sparknotes\.|adulteducation\.quest/.test(host)) factor *= 0.6;
   return factor;
 }
 

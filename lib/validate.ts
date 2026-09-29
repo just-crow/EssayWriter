@@ -253,6 +253,32 @@ export function assertStructureUsable(s: EssayStructure): void {
   }
 }
 
+/** Generic section words that are not promises about content. */
+const HEADING_STOP = new Set(
+  "theory relevance modern world evidence historical contemporary contexts context challenges challenge technological innovation innovations agricultural advancement advances alternative theories theory role human ingenuity synthesis assessing assessment core principles predictions supporting concerns concern review overview analysis evaluation impact effects study discussion debate today relevance contemporary historical".split(" ")
+);
+
+/** Every capitalized name in a heading (Boserup, Simon, Malthus) must be
+ * discussed in that section's paragraphs. Catches heading promises the
+ * body never keeps, like the Malthus sample naming Simon in a heading
+ * but omitting him from the text. Throws a retryable error. */
+export function assertHeadingNamesCovered(draft: EssayDraft): void {
+  for (const section of draft.sections) {
+    const heading = section.heading || "";
+    const names = [...heading.matchAll(/\b([A-Z][a-z]{3,})\b/g)]
+      .map((m) => m[1])
+      .filter((w) => !HEADING_STOP.has(w.toLowerCase()));
+    if (names.length === 0) continue;
+    const body = section.paragraphs.join(" ").toLowerCase();
+    const missing = names.filter((n) => !body.includes(n.toLowerCase()));
+    if (missing.length > 0) {
+      throw new Error(
+        `The section “${heading}” promises ${missing.join(", ")} but never discusses them. Cover each named person or theory in that section with evidence, or remove the name from the heading.`
+      );
+    }
+  }
+}
+
 export type ValidationIssue = { code: string; detail: string };
 
 /**

@@ -27,6 +27,24 @@ function yearFrom(date: string): string {
   return m ? m[0] : "";
 }
 
+/** Clean raw search titles: strip (PDF) prefixes, file extensions,
+ * excessive punctuation and ALL-CAPS shouting while preserving meaning. */
+export function cleanSourceTitle(raw: string): string {
+  let t = (raw || "").trim();
+  t = t.replace(/^\(?\s*PDF\s*\)?\s*[-–:|.]?\s*/i, "");
+  t = t.replace(/\.(pdf|docx?|pptx?)\s*$/i, "");
+  t = t.replace(/\s*[|·•\-–—]+\s*$/g, "").trim();
+  t = t.replace(/\s{2,}/g, " ").replace(/\.{2,}/g, "").trim();
+  // Title-case shouting: "A CRITICAL ANALYSIS OF ..." -> "A critical analysis of ..."
+  // Keep short words/acronyms intact by only fixing long all-caps strings.
+  if (t.length >= 24 && /^[A-Z0-9\s\-–:;,.()&']+$/.test(t) && /[A-Z]{4,}/.test(t)) {
+    const lower = t.toLowerCase();
+    t = lower.replace(/(^|[.!?]\s+|\bafter\b\s+)([a-z])/g, (_m, pre: string, ch: string) => pre + ch.toUpperCase());
+    t = t.charAt(0).toUpperCase() + t.slice(1);
+  }
+  return t || raw.trim();
+}
+
 /**
  * Build source records deterministically from verified search results.
  * No model involved: every field is observed (title, URL, publisher, date,
@@ -48,7 +66,7 @@ export function buildSources(
     return {
       id: String(i + 1),
       author: "",
-      title: w.title,
+      title: cleanSourceTitle(w.title),
       container: "",
       publisher: w.publisher || host,
       year: yearFrom(w.date),
@@ -137,17 +155,30 @@ export function isDisallowedUrl(rawUrl: string): boolean {
 export function qualityWeight(w: WebSource): number {
   let score = w.score;
   const host = (w.publisher || "").toLowerCase();
+  const path = (() => { try { return new URL(w.url).pathname.toLowerCase(); } catch { return ""; } })();
   // Academic & Government domains get top priority
   if (host.endsWith(".edu") || host.endsWith(".gov") || /(^|\.)(ac\.[a-z]{2,}|gov\.[a-z]{2,})$/.test(host)) {
     score += 0.5;
   }
-  // Major peer-reviewed and scientific publishers
+  // Major peer-reviewed and scientific publishers, reference works, primary sources
   if (
-    /nature\.com|springer\.com|sciencedirect\.com|plos\.org|wiley\.com|frontiersin\.org|cell\.com|thelancet\.com|nejm\.org|bmj\.com|tandfonline\.com|oup\.com|cambridge\.org|jstor\.org|nih\.gov|biorxiv\.org|arxiv\.org|semanticscholar\.org|pubmed|britannica\.com/.test(
+    /nature\.com|springer\.com|sciencedirect\.com|plos\.org|wiley\.com|frontiersin\.org|cell\.com|thelancet\.com|nejm\.org|bmj\.com|tandfonline\.com|oup\.com|cambridge\.org|jstor\.org|nih\.gov|biorxiv\.org|arxiv\.org|semanticscholar\.org|pubmed|britannica\.com|worldbank\.org|un\.org|fao\.org|ourworldindata\.org/.test(
       host
     )
   ) {
     score += 0.4;
+  }
+  // Study-guide / tutoring / homework sites are background at best.
+  // Keep them as fallback but never rank them above substantive pages.
+  if (
+    /tutorchase\.|fiveable\.|varsitytutors\.|coursehero\.|chegg\.|brainly\.|quizlet\.|studocu\.|cliffsnotes\.|sparknotes\.|adulteducation\.quest/.test(host) ||
+    /\/(notes|study-guide|key-terms|practice\/lessons|ap\/human-geography)\//.test(path)
+  ) {
+    score -= 0.45;
+  }
+  // Aggregator PDF dumps with shouting titles are weak evidence.
+  if (/academia\.edu|researchgate\.net/.test(host) && /^\(?\s*pdf/i.test(w.title)) {
+    score -= 0.15;
   }
   return score;
 }

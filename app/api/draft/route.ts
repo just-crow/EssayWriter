@@ -19,6 +19,7 @@ import { buildWritingPlan, composePlannedDraft } from "@/lib/planned-writer";
 import { structuralSectionRole } from "@/lib/paragraph-plan";
 import { removeOffTopicProse } from "@/lib/topic-relevance";
 import { groupCitationRuns } from "@/lib/citation-runs";
+import { assertHeadingNamesCovered } from "@/lib/validate";
 import { assertCitationMinimums, assertUncitedConclusion, citationCounts } from "@/lib/citation-limits";
 import { workIdentity } from "@/lib/work-identity";
 import { repairCitationMinimums } from "@/lib/citation-repair";
@@ -70,11 +71,22 @@ export async function POST(req: Request) {
     const findings = JSON.stringify(plan);
     const diagnostics: DraftDiagnostics = {plan: plannedEvidence(plan.tasks, plan.headings), stages: [], removed: []};
     if (new Set(writingSources.map((source) => normalizeUrl(source.url))).size < body.minimumSources) return NextResponse.json({ error: `The selected pages did not provide factual findings from ${body.minimumSources} distinct works. Gather stronger sources or lower the minimum cited works.` }, { status: 400 });
+    // The model starves when the source dump fills its context (18 x 100k).
+    // Planning already selected findings; the writer only needs enough page
+    // text to paraphrase accurately. Truncate per-source content for the
+    // prompt while keeping full texts for server-side verification.
+    const MAX_WRITER_CHARS_PER_SOURCE = 12000;
+    const writerSources = writingSources.map((s) => ({
+      ...s,
+      content: s.content.length > MAX_WRITER_CHARS_PER_SOURCE
+        ? s.content.slice(0, MAX_WRITER_CHARS_PER_SOURCE) + "\n[truncated]"
+        : s.content,
+    }));
     const draft = await completeJson(
       {
         system: DRAFT_SYSTEM,
-        user: draftUserPrompt({ ...body, sourcesJson: JSON.stringify(writingSources), evidenceSpine: findings }),
-        temperature: 1,
+        user: draftUserPrompt({ ...body, sourcesJson: JSON.stringify(writerSources), evidenceSpine: findings }),
+        temperature: 0.7,
         maxTokens: Math.min(32768, Math.max(12000, body.wordTarget * 3 + 6000)),
         schema: writerDraftSchema(),
         // Use native JSON syntax constraints for prose. This NIM backend's
@@ -108,6 +120,7 @@ export async function POST(req: Request) {
           if (d.sections.some(section => structuralSectionRole(section.heading) !== null)) {
             throw new Error("Introduction and conclusion must appear only in their dedicated essay fields, not as cited body sections.");
           }
+          assertHeadingNamesCovered(d);
           d.footnotes = writingSources.map((source) => ({
             id: Number(source.id), author: source.author, title: source.title,
             publisher: source.publisher || source.container, year: source.year,

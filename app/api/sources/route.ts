@@ -31,7 +31,9 @@ export interface SourcesResult {
   liveHits: number;
 }
 
-/** Give every section a search before spending queries on individual points. */
+/** Give every section a search before spending queries on individual points,
+ * then reserve the last slots for evaluative angles (criticism, evidence,
+ * data) so the essay gets counter-arguments instead of descriptive echoes. */
 export function planSourceQueries(topic: string, structureJson: string): Array<{ text: string; label: string }> {
   const general = { text: topic, label: "general background" };
   try {
@@ -51,8 +53,12 @@ export function planSourceQueries(topic: string, structureJson: string): Array<{
       const point = section.paragraphs?.[index]?.point?.replace(/^Question to investigate:\s*/i, "").trim();
       return point ? [{ text: `${subject} ${point.slice(0, 140)}`, label: `the section “${section.heading}”` }] : [];
     }));
+    const evaluative = [
+      { text: `${subject} criticism evaluation evidence`, label: "evaluation and criticism" },
+      { text: `${subject} data statistics case study`, label: "evidence and data" },
+    ];
     const unique = new Map<string, { text: string; label: string }>();
-    for (const query of [...headingQueries, general, ...pointQueries]) {
+    for (const query of [...headingQueries, general, ...pointQueries, ...evaluative]) {
       if (!unique.has(query.text)) unique.set(query.text, query);
     }
     return [...unique.values()].slice(0, 18);
@@ -139,9 +145,15 @@ export async function runSourcesPipeline(
     ...s,
     content: (texts.get(normalizeUrl(s.url || "")) || snippets.get(normalizeUrl(s.url || "")) || "").trim(),
   }));
-  const substantive = sources.filter((s) => s.content.length >= 80);
+  // Snippet-only pages (weak extracts) produce generic memory-written essays
+  // like the Malthus sample. Require real page text when available.
+  const substantive = sources.filter((s) => s.content.length >= 300);
   if (substantive.length >= MIN_VERIFIED) {
     sources = substantive;
+  } else {
+    // Keep the longest available rather than the rank order when everything
+    // is thin, so at least the writer sees the most text possible.
+    sources = [...sources].sort((a, b) => b.content.length - a.content.length);
   }
 
   if (input.projectId) {

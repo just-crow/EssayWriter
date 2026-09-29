@@ -75,13 +75,10 @@ export default function InputPanel(props: InputPanelProps) {
     onWordTargetChange,
     instructionText,
     onInstructionChange,
-    mode,
-    onModeChange,
     onParsedText,
     onGenerateOutline,
     onGatherSources,
     onDraftEssay,
-    onOneShot,
     outlineBusy,
     sourcesBusy,
     draftBusy,
@@ -215,36 +212,7 @@ export default function InputPanel(props: InputPanelProps) {
         </ol>
       </nav>
 
-      {/* Mode toggle */}
-      <div>
-        <span id="mode-label" className="mb-1 block text-sm font-semibold text-stone-900 dark:text-stone-100">
-          {t("workflowMode")}
-        </span>
-        <div
-          role="group"
-          aria-labelledby="mode-label"
-          className="grid grid-cols-2 gap-1 rounded-lg border border-stone-300 bg-stone-200/60 p-1 dark:border-stone-700 dark:bg-stone-800/80"
-        >
-          {(["staged", "one-shot"] as StudioMode[]).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => onModeChange(m)}
-              aria-pressed={mode === m}
-              className={`rounded-md px-3 py-1.5 text-sm font-semibold transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 ${
-                mode === m
-                  ? "bg-white text-emerald-900 shadow-sm dark:bg-stone-900 dark:text-emerald-400"
-                  : "text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-200"
-              }`}
-            >
-              {m === "staged" ? t("modeStaged") : t("modeOneShot")}
-            </button>
-          ))}
-        </div>
-        <p className="mt-1 text-xs leading-5 text-stone-600 dark:text-stone-400">
-          {mode === "staged" ? t("modeStagedHelp") : t("modeOneShotHelp")}
-        </p>
-      </div>
+      {/* Agent workflow: structure -> sources -> draft, each approved in turn. */}
 
       {/* Topic */}
       <div>
@@ -411,41 +379,26 @@ export default function InputPanel(props: InputPanelProps) {
         ) : null}
       </div>
 
-      {/* Actions */}
+      {/* Actions: enforced agent order, one stage at a time. */}
       <div className="flex flex-col gap-2 border-t border-stone-200 pt-4 dark:border-stone-800">
-        {mode === "staged" ? (
-          <>
-            <button type="button" onClick={onGenerateOutline} disabled={!canOutline || outlineBusy} className={primaryBtn}>
-              {outlineBusy ? t("writingOutline") : t("generateOutline")}
-            </button>
-            {!canOutline ? (
-              <p className="text-xs leading-5 text-stone-600 dark:text-stone-400">{t("topicErrorButton")}</p>
-            ) : null}
-            <button type="button" onClick={onGatherSources} disabled={!canSources || sourcesBusy} className={secondaryBtn}>
-              {sourcesBusy ? t("gatheringSources") : t("gatherSources")}
-            </button>
-            {hasOutline && !outlineApproved ? (
-              <p className="text-xs leading-5 text-amber-900 dark:text-amber-300">{t("approveOutlineFirst")}</p>
-            ) : null}
-            <button type="button" onClick={onDraftEssay} disabled={!canDraft || draftBusy} className={secondaryBtn}>
-              {draftBusy ? t("draftingEssay") : t("draftEssay")}
-            </button>
-            {hasSources && !sourcesApproved ? (
-              <p className="text-xs leading-5 text-amber-900 dark:text-amber-300">{t("approveSourcesFirst")}</p>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <button type="button" onClick={onOneShot} disabled={!canOutline || busy} className={primaryBtn}>
-              {busy ? t("writingEssay") : t("generateEssay")}
-            </button>
-            {!canOutline ? (
-              <p className="text-xs leading-5 text-stone-600 dark:text-stone-400">{t("topicErrorButton")}</p>
-            ) : (
-              <p className="text-xs leading-5 text-stone-600 dark:text-stone-400">{t("oneShotHelp")}</p>
-            )}
-          </>
-        )}
+        <button type="button" onClick={onGenerateOutline} disabled={!canOutline || outlineBusy} className={primaryBtn}>
+          {outlineBusy ? t("writingOutline") : t("generateOutline")}
+        </button>
+        {!canOutline ? (
+          <p className="text-xs leading-5 text-stone-600 dark:text-stone-400">{t("topicErrorButton")}</p>
+        ) : null}
+        <button type="button" onClick={onGatherSources} disabled={!canSources || sourcesBusy} className={secondaryBtn}>
+          {sourcesBusy ? t("gatheringSources") : t("gatherSources")}
+        </button>
+        {hasOutline && !outlineApproved ? (
+          <p className="text-xs leading-5 text-amber-900 dark:text-amber-300">{t("approveOutlineFirst")}</p>
+        ) : null}
+        <button type="button" onClick={onDraftEssay} disabled={!canDraft || draftBusy} className={secondaryBtn}>
+          {draftBusy ? t("draftingEssay") : t("draftEssay")}
+        </button>
+        {hasSources && !sourcesApproved ? (
+          <p className="text-xs leading-5 text-amber-900 dark:text-amber-300">{t("approveSourcesFirst")}</p>
+        ) : null}
       </div>
     </div>
   );

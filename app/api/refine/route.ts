@@ -4,7 +4,7 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema, WriterDraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, prepareDraft, sourcesTextMap, splitSentences } from "@/lib/validate";
+import { validateDraft, prepareDraft, sourcesTextMap, splitSentences, assertHeadingNamesCovered } from "@/lib/validate";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
 import type { SourceItem } from "@/lib/essay-types";
 import { saveDocxFile } from "@/lib/docx-store";
@@ -114,12 +114,17 @@ export async function POST(req: Request) {
     // plus the freshly fetched ones.
     const dbSources = await prisma.source.findMany({ where: { projectId: body.projectId } });
     const sourcesText = sourcesTextMap([...dbSources, ...newSources]);
+    const trunc = (content: string) => content.length > 12000 ? content.slice(0, 12000) + "\n[truncated]" : content;
+    const writerDbSources = dbSources
+      .filter((s) => body.minimumSources > citedUrls.size || citedUrls.has(normalizeUrl(s.url)))
+      .map(({ title, url, content }) => ({ title, url, content: trunc(content || "") }));
+    const writerNewSources = newSources.map((s) => ({ ...s, content: trunc(s.content || "") }));
 
     const draft = await completeJson(
       {
         system: REFINE_SYSTEM,
-        user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\nMinimum footnotes: ${body.minimumFootnotes}\nMinimum distinct cited works: ${body.minimumSources}\nDevelop factual findings from at least this many different source URLs before writing. Cite at least the requested number of separate factual sentences; These are minimums, not exact counts or caps: you may use more footnotes and more distinct works when they support the essay. Do not add decorative citations.\n\nCurrent essay JSON:\n${baseEssayForWriter}\n\nExisting source texts:\n${JSON.stringify(dbSources.filter((s) => body.minimumSources > citedUrls.size || citedUrls.has(normalizeUrl(s.url))).map(({ title, url, content }) => ({ title, url, content })))}\n\nUser revision instruction:\n${body.instruction}\n\n${sourceBlock}\n\nReturn the revised essay JSON now.`,
-        temperature: 1,
+        user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\nMinimum footnotes: ${body.minimumFootnotes}\nMinimum distinct cited works: ${body.minimumSources}\nDevelop factual findings from at least this many different source URLs before writing. Cite at least the requested number of separate factual sentences; These are minimums, not exact counts or caps: you may use more footnotes and more distinct works when they support the essay. Do not add decorative citations.\n\nCurrent essay JSON:\n${baseEssayForWriter}\n\nExisting source texts:\n${JSON.stringify(writerDbSources)}\n\nUser revision instruction:\n${body.instruction}\n\n${sourceBlock.replace(JSON.stringify(newSources), JSON.stringify(writerNewSources))}\n\nReturn the revised essay JSON now.`,
+        temperature: 0.7,
         maxTokens: Math.min(32768, Math.max(12000, project.wordTarget * 3 + 6000)),
         schema: WriterDraftSchema,
         responseFormat: { type: "json_object" },
@@ -129,6 +134,7 @@ export async function POST(req: Request) {
         validate: async (d) => {
           prepareDraft(d, sourcesText, { deferEvidence: true });
           assertUncitedConclusion(d);
+          assertHeadingNamesCovered(d);
           const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources]);
           assertUncitedConclusion(d);
           assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
