@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DraftDiagnosticsSchema } from "./draft-diagnostics";
 
 export const StructureParagraphSchema = z.object({
   point: z.string(),
@@ -76,6 +77,8 @@ export const DraftSchema = z.object({
       })
     )
     .default([]),
+  /** Server-observed drafting and verification stages, never model evidence. */
+  diagnostics: DraftDiagnosticsSchema.optional(),
 });
 
 export type EssayStructure = z.infer<typeof StructureSchema>;
@@ -108,18 +111,18 @@ export const WriterDraftSchema = z.preprocess(normalizeWriterShape, DraftSchema.
 
 /** Validate representation here. Length and depth apply to verified prose. */
 export function writerDraftSchema() {
-  // NIM's constrained decoder treats patterns as a whole-string grammar.
-  // Allow prose around the marker rather than decoding a marker alone.
-  // Exclude raw JSON delimiters: this decoder applies the regex before
-  // string escaping, so an unrestricted wildcard can consume closing quotes.
-  const cited = z.string().regex(/[^"\\\r\n]*\[\^[1-9]\d*\][^"\\\r\n]*/, "Use a cited prose paragraph without double quotes or line breaks.");
+  // JSON parsing already handles escaped quotes and line breaks. Citation
+  // support belongs to the sentence audit, not a paragraph format regex:
+  // analysis can be uncited, while a cited paragraph can still contain
+  // unsupported factual statements.
+  const prose = z.string().min(1);
   return z.preprocess(normalizeWriterShape, DraftSchema.extend({
-    introduction: z.array(cited.min(1)).length(1),
-    conclusion: z.array(cited.min(1)).length(1),
+    introduction: z.array(prose).length(1),
+    conclusion: z.array(z.string().min(1).refine(text => !/\[\^[^\]]+\]/.test(text), "The conclusion must contain no citations and no new information.")).length(1),
     sections: z.array(DraftSectionSchema.extend({
       // Final paragraph depth is checked after source verification and
       // consolidation, rather than rejecting a raw paragraph before merging.
-      paragraphs: z.array(cited.min(1)).min(1),
+      paragraphs: z.array(prose).min(1),
     })).min(1),
     evidence: z.unknown().optional(),
     footnotes: z.unknown().optional(),

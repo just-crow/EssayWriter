@@ -59,14 +59,17 @@ export function citedSentenceShare(draft: EssayDraft): { share: number; cited: n
   return { share: cited / total, cited, total };
 }
 
-/** Reject source-sentence recycling used to meet the word target. */
-export function assertNoRepeatedSentences(draft: EssayDraft): void {
-  const sentences = [...draft.introduction, ...draft.sections.flatMap((section) => section.paragraphs), ...draft.conclusion]
+/** Detect repeated wording for analysis without blocking essay generation. */
+export function repeatedSentences(paragraphs: string[]): string[] {
+  const sentences = paragraphs
     .flatMap(splitSentences).map((sentence) => sentence.replace(/\[\^\d+\]/g, "").replace(/\s+/g, " ").trim().toLowerCase())
     .filter((sentence) => sentence.split(/\s+/).length >= 12);
-  if (sentences.length - new Set(sentences).size > 1) {
-    throw new Error("The essay repeats substantial sentences across paragraphs. Paraphrase the evidence and develop each finding once, with distinct analysis and explicit recommendations. Do not pad the word count by repeating source sentences.");
-  }
+  const seen = new Set<string>();
+  return sentences.filter(sentence => {
+    if (seen.has(sentence)) return true;
+    seen.add(sentence);
+    return false;
+  });
 }
 
 export function cleanRawQuote(s: string): string {
@@ -279,6 +282,60 @@ const STOP_WORDS = new Set("a an and are as at be been being but by for from had
 
 function wordSet(s: string): Set<string> {
   return new Set((normQuote(s).match(/[a-z0-9]+/g) ?? []).filter((word) => word.length > 2 && !STOP_WORDS.has(word)));
+}
+
+/** Plural-insensitive stem shared by claim and passage terms. Consistent on
+ * both sides matters more than linguistic perfection. */
+function stemTerm(word: string): string {
+  return word.length > 4 && word.endsWith("s") && !/(ss|us|is)$/.test(word) ? word.slice(0, -1) : word;
+}
+
+/** Distinctive claim terms: content words an entailing passage must share.
+ * Names, organisms, places, and numbers identify a specific claim; a passage
+ * containing none of them cannot verify it, however eloquent. Generic short
+ * words, stopwords, and bare years are excluded. Topic-agnostic. */
+export function distinctiveTerms(text: string): string[] {
+  const terms = new Set<string>();
+  for (const raw of normQuote(text).match(/[a-z0-9]+/g) ?? []) {
+    if (/^(19|20)\d{2}$/.test(raw)) continue;
+    if ((raw.length < 4 && !/\d/.test(raw)) || STOP_WORDS.has(raw)) continue;
+    terms.add(raw);
+  }
+  return [...terms];
+}
+
+/** Lexical entailment gate. Returns the claim's distinctive terms absent from
+ * the supporting passage text (empty = covered). Short generic claims with
+ * fewer than 4 distinctive terms are skipped as unjudgeable. Otherwise the
+ * passage must share at least 2 of up to 4 terms, 3 of up to 7, 4 beyond
+ * that, or 60% of the terms — so a real but unrelated passage cannot verify
+ * a claim that names examples, varieties, places, or numbers it never
+ * mentions. Digit-form statistics must always occur in the passage (bare
+ * years excluded). Comparison is plural-insensitive on both sides. */
+export function uncoveredClaimTerms(claim: string, passageText: string): string[] {
+  const wanted = distinctiveTerms(claim);
+  const normPassage = normQuote(passageText);
+  const passageStems = new Set(
+    (normPassage.match(/[a-z0-9]+/g) ?? []).map(stemTerm)
+  );
+  let termMissing: string[] = [];
+  if (wanted.length >= 4) {
+    termMissing = wanted.filter((term) => !passageStems.has(stemTerm(term)));
+    const matched = wanted.length - termMissing.length;
+    const needed = wanted.length <= 4 ? 2 : wanted.length <= 7 ? 3 : 4;
+    if (matched >= needed || matched / wanted.length >= 0.6) termMissing = [];
+  }
+  // Statistics are exact: a digit-form number in the claim must occur in the
+  // passage (bare years excluded). "42 percent" verified by a "19 percent"
+  // passage is fabrication even when every word matches.
+  const passageNums = new Set(normPassage.match(/\d[\d.,]*/g) ?? []);
+  const plain = (n: string) => n.replace(/,/g, "");
+  const missingNums = [...new Set(
+    (normQuote(claim).match(/\d[\d.,]*/g) ?? [])
+      .map((n) => n.replace(/[.,]+$/, ""))
+      .filter((n) => !/^(19|20)\d{2}$/.test(n) && ![...passageNums].some((p) => plain(p) === plain(n)))
+  )];
+  return [...new Set([...termMissing, ...missingNums])];
 }
 
 export function findCandidateInText(srcText: string, rawQuote: string): string | null {
@@ -507,33 +564,12 @@ export function consolidateSectionParagraphs(draft: EssayDraft): void {
         newFlatIdx++;
       }
     }
-    sec.paragraphs = consolidated;
+    sec.paragraphs = consolidated.length ? consolidated : [""];
   }
 
-  // 3. Check for any remaining shallow section paragraphs across sections
-  for (let si = 0; si < draft.sections.length; si++) {
-    const sec = draft.sections[si];
-    for (let pi = sec.paragraphs.length - 1; pi >= 0; pi--) {
-      const p = sec.paragraphs[pi];
-      if (cleanWords(p) < 60 || sentenceCount(p) < 3) {
-        if (pi > 0) {
-          sec.paragraphs[pi - 1] += ` ${p}`;
-          sec.paragraphs.splice(pi, 1);
-        } else if (si > 0 && draft.sections[si - 1].paragraphs.length > 0) {
-          const prev = draft.sections[si - 1];
-          prev.paragraphs[prev.paragraphs.length - 1] += ` ${p}`;
-          sec.paragraphs.splice(pi, 1);
-        } else if (si + 1 < draft.sections.length && draft.sections[si + 1].paragraphs.length > 0) {
-          const next = draft.sections[si + 1];
-          next.paragraphs[0] = `${p} ${next.paragraphs[0]}`;
-          sec.paragraphs.splice(pi, 1);
-        }
-      }
-    }
-  }
-
-  // Remove empty sections
-  draft.sections = draft.sections.filter((s) => s.paragraphs.length > 0);
+  // Section boundaries express different questions. A short paragraph
+  // must be repaired under its own heading, never moved to an unrelated
+  // neighbouring section or silently removed after a source audit.
 
   // Recalculate conclusion index
   const finalSectionCount = draft.sections.flatMap((s) => s.paragraphs).length;
@@ -548,7 +584,7 @@ export function consolidateSectionParagraphs(draft: EssayDraft): void {
     const totalParas = 1 + finalSectionCount + draft.conclusion.length;
     for (const e of draft.evidence) {
       // Each audited citation occurrence has a unique footnote ID. Use its
-      // final location after cross-section merges, rather than a stale index.
+      // final location after paragraph consolidation, rather than a stale index.
       const citedParagraph = finalParagraphs.findIndex((text) => text.includes(`[^${e.source}]`));
       if (citedParagraph >= 0) {
         e.paragraph = citedParagraph;
@@ -758,6 +794,14 @@ export function rebuildWorksCited(draft: EssayDraft): void {
 export function validateDraft(draft: EssayDraft): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const allText = draftText(draft);
+
+  const shortParagraphs = draft.sections.flatMap((section) => section.paragraphs)
+    .filter((paragraph) => splitSentences(paragraph).length < 3 ||
+      paragraph.replace(/\[\^\d+\]/g, "").split(/\s+/).filter(Boolean).length < 60).length;
+  if (shortParagraphs) issues.push({
+    code: "SHORT_PARAGRAPH",
+    detail: `${shortParagraphs} body paragraph${shortParagraphs === 1 ? " is" : "s are"} short after source verification. Expand using supported findings if more depth is needed.`,
+  });
 
   if (allText.includes("—")) {
     issues.push({

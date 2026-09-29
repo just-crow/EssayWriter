@@ -1,0 +1,31 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const nim=require('../lib/nim.ts');
+const {removeOffTopicProse}=require('../lib/topic-relevance.ts');
+
+test('removes a well-cited but unrelated example while preserving citation scope for relevant claims',async()=>{
+  const draft={title:'Crop essay',introduction:['The plant study recorded a crop response.[^1]'],
+    sections:[{heading:'Adoption of Crops',paragraphs:[
+      'Public acceptance affects adoption. An animal product received regulatory review. The meat was offered for sale.[^2] Crop regulations differ across countries.[^3]'
+    ]}],conclusion:['The established crop findings warrant careful review.'],footnotes:[],evidence:[],worksCited:[],coverage:[]};
+  const original=nim.nimChatLong;
+  nim.nimChatLong=async params=>{
+    assert.match(params.user,/ESSAY TOPIC: Crop improvement/);
+    assert.match(params.user,/Adoption of Crops/);
+    assert.match(params.user,/Evaluate adoption of crop products/);
+    const batch=JSON.parse(params.user.split('SENTENCES TO CHECK: ')[1].split('\nReturn ')[0]);
+    return JSON.stringify({decisions:batch.flatMap(item=>item.sentences.map(sentence=>({
+      paragraph:item.paragraph,sentenceIndex:sentence.sentenceIndex,
+      relevant:!(item.paragraph===1 && [1,2].includes(sentence.sentenceIndex)),
+      reason:'Relevance checked.'
+    })))});
+  };
+  try{
+    const removed=await removeOffTopicProse(draft,'Crop improvement',undefined,JSON.stringify({sections:[{heading:'Adoption of Crops',paragraphs:[{point:'Evaluate adoption of crop products.'}]}]}));
+    assert.equal(removed.length,2);
+    assert.doesNotMatch(draft.sections[0].paragraphs[0],/animal|meat/i);
+    assert.match(draft.sections[0].paragraphs[0],/Public acceptance affects adoption\.\[\^2\]/);
+    assert.match(draft.sections[0].paragraphs[0],/Crop regulations differ across countries\.\[\^3\]/);
+    assert.deepEqual(draft.conclusion,['The established crop findings warrant careful review.']);
+  }finally{nim.nimChatLong=original;}
+});

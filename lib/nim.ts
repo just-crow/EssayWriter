@@ -8,6 +8,8 @@ import type {
 
 export const NIM_MODEL = "nvidia/nemotron-3-super-120b-a12b";
 export const NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
+export const OPENROUTER_MODEL = "openai/gpt-6-luna";
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 /** Upper bound for one model attempt. The hosted endpoint sometimes stalls
  * (accepts the request but sends nothing for minutes); without this the
@@ -16,6 +18,19 @@ export const NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
 export const NIM_TIMEOUT_MS = 60_000;
 
 let cached: OpenAI | null = null;
+let cachedRouter: OpenAI | null = null;
+let routerKey = "";
+let routerUnavailableUntil = 0;
+
+export function openRouterClient(): OpenAI {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY.");
+  if (!cachedRouter || routerKey !== apiKey) {
+    cachedRouter = new OpenAI({ apiKey, baseURL: OPENROUTER_BASE_URL, maxRetries: 0 });
+    routerKey = apiKey;
+  }
+  return cachedRouter;
+}
 
 export function nimClient(): OpenAI {
   const apiKey = process.env.NVIDIA_NIM_API_KEY;
@@ -33,8 +48,42 @@ export function nimClient(): OpenAI {
   return cached;
 }
 
+function getRetryAfterMs(err: unknown): number {
+  // The OpenAI SDK stores headers as a plain Record (not a Headers instance
+  // with .get()), so the old `.headers?.get?.("retry-after")` never matched
+  // and 429s retried on a fixed 2s/4s cadence, ignoring the server's signal.
+  const headers = (err as { headers?: unknown })?.headers;
+  let raw: string | null | undefined;
+  if (headers && typeof (headers as { get?: unknown }).get === "function") {
+    try {
+      raw = (headers as { get: (name: string) => string | null }).get("retry-after");
+    } catch {
+      raw = undefined;
+    }
+  } else if (headers && typeof headers === "object") {
+    const record = headers as Record<string, string | string[] | null | undefined>;
+    const key = Object.keys(record).find((k) => k.toLowerCase() === "retry-after");
+    const value = key ? record[key] : undefined;
+    raw = Array.isArray(value) ? value[0] : value;
+    if (raw == null) {
+      const msKey = Object.keys(record).find((k) => k.toLowerCase() === "retry-after-ms");
+      const msValue = msKey ? record[msKey] : undefined;
+      const ms = Number(Array.isArray(msValue) ? msValue[0] : msValue);
+      if (Number.isFinite(ms) && ms > 0) return Math.min(60_000, ms);
+    }
+  }
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.min(60_000, seconds * 1000);
+  return 0;
+}
+
+function getStatus(err: unknown): number | undefined {
+  const status = (err as { status?: unknown })?.status;
+  return typeof status === "number" ? status : undefined;
+}
+
 function isRetryable(err: unknown): boolean {
-  const status = (err as { status?: number })?.status;
+  const status = getStatus(err);
   if (status === 429 || (typeof status === "number" && status >= 500)) return true;
   const name = (err as { constructor?: { name?: string } })?.constructor?.name;
   if (name === "APIConnectionError" || name === "APIConnectionTimeoutError") return true;
@@ -60,13 +109,20 @@ export async function withRetry<T>(
     } catch (err) {
       last = err;
       if (!isRetryable(err) || attempt === tries - 1) throw err;
-      await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+      const retryAfterMs = getRetryAfterMs(err);
+      const base = 2000 * 2 ** attempt;
+      const delay = retryAfterMs > 0 ? Math.min(60_000, retryAfterMs) : Math.min(16_000, base);
+      await new Promise((r) => setTimeout(r, delay));
     }
   }
   throw last;
 }
 
 interface ChatParams {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  provider?: "nvidia";
+  onProvider?: (provider: "openrouter" | "nvidia") => void;
   model?: string;
   system: string;
   user: string;
@@ -88,8 +144,10 @@ interface ChatParams {
   responseFormat?: ChatCompletionCreateParamsNonStreaming["response_format"];
 }
 
-/** Provider extension field (Nemotron reasoning toggle). */
+/** Provider-specific reasoning controls. */
 type ExtraBody = {
+  provider?: { require_parameters: boolean };
+  reasoning?: { enabled?: boolean; effort?: "none" | "low" | "medium"; max_tokens?: number; exclude?: boolean };
   chat_template_kwargs?: { enable_thinking: boolean; low_effort?: boolean; reasoning_budget?: number };
   /** NVIDIA's current Nemotron API uses this OpenAI-compatible control. */
   reasoning_effort?: "none";
@@ -97,13 +155,13 @@ type ExtraBody = {
 
 function requestBody(
   params: ChatParams,
-  extra?: { stream?: false }
+  extra?: { stream?: false }, provider?: "nvidia" | "openrouter"
 ): ChatCompletionCreateParamsNonStreaming & ExtraBody;
 function requestBody(
   params: ChatParams,
-  extra: { stream: true }
+  extra: { stream: true }, provider?: "nvidia" | "openrouter"
 ): ChatCompletionCreateParamsStreaming & ExtraBody;
-function requestBody(params: ChatParams, extra?: { stream?: boolean }): (
+function requestBody(params: ChatParams, extra?: { stream?: boolean }, provider: "nvidia" | "openrouter" = "nvidia"): (
   | ChatCompletionCreateParamsNonStreaming
   | ChatCompletionCreateParamsStreaming
 ) & ExtraBody {
@@ -111,15 +169,30 @@ function requestBody(params: ChatParams, extra?: { stream?: boolean }): (
     { role: "system", content: params.system },
     { role: "user", content: params.user },
   ];
+  const routerModel = params.model ?? OPENROUTER_MODEL;
+  const luna = provider === "openrouter" && routerModel === OPENROUTER_MODEL;
   const body = {
-    model: params.model ?? NIM_MODEL,
+    model: provider === "openrouter" ? routerModel
+      : params.model?.startsWith("nvidia/") && !params.model.endsWith(":free") ? params.model : NIM_MODEL,
     messages,
-    temperature: params.temperature ?? 0.6,
-    top_p: 0.95,
+    // GPT-6 reasoning requests reject custom sampling values. They remain
+    // available for the NVIDIA fallback and for Luna with reasoning off.
+    ...(!luna || params.thinking === false ? { temperature: params.temperature ?? 0.6, top_p: 0.95 } : {}),
     max_tokens: params.maxTokens ?? 6000,
     ...(params.responseFormat ? { response_format: params.responseFormat } : {}),
+    // Luna's JSON-object mode works, but its provider is excluded by
+    // require_parameters. Reserve that strict filter for JSON Schema.
+    ...(provider === "openrouter" && params.responseFormat &&
+      (!luna || params.responseFormat.type === "json_schema")
+      ? { provider: { require_parameters: true } } : {}),
     ...extra,
-    ...(!(params.model ?? NIM_MODEL).includes("nemotron") ? {} : params.thinking === false
+    ...(luna ? { reasoning: params.thinking === false
+      ? { effort: "none" as const, exclude: true }
+      : { effort: params.lowEffort ? "low" as const : "medium" as const, exclude: true } }
+      : provider === "openrouter" ? { reasoning: params.thinking === false
+      ? { enabled: false }
+      : { enabled: true, exclude: true, ...(params.reasoningBudget !== undefined ? { max_tokens: params.reasoningBudget } : params.lowEffort ? { effort: "low" as const } : {}) } }
+      : !(params.model ?? NIM_MODEL).includes("nemotron") ? {} : params.thinking === false
       ? { chat_template_kwargs: { enable_thinking: false }, reasoning_effort: "none" as const }
       : params.thinking === true
         ? { chat_template_kwargs: {
@@ -136,13 +209,32 @@ function requestBody(params: ChatParams, extra?: { stream?: boolean }): (
   ) & ExtraBody;
 }
 
+async function withProviderFallback(params: ChatParams, run: (client: OpenAI, provider: "nvidia" | "openrouter") => Promise<string>) {
+  params.signal?.throwIfAborted();
+  let offset = 0;
+  if (params.provider !== "nvidia" && process.env.OPENROUTER_API_KEY && Date.now() >= routerUnavailableUntil) {
+    params.onAttempt?.(1);
+    params.onProvider?.("openrouter");
+    try { return await run(openRouterClient(), "openrouter"); }
+    catch (err) {
+      params.signal?.throwIfAborted();
+      if (params.signal?.aborted) throw err;
+      // Discard any partial output. Use NVIDIA immediately, and avoid
+      // repeatedly probing an unavailable provider during the same essay.
+      routerUnavailableUntil = Date.now() + 60_000;
+      offset = 1;
+    }
+  }
+  params.onProvider?.("nvidia");
+  return withRetry(() => { params.signal?.throwIfAborted(); return run(nimClient(), "nvidia"); }, params.tries ?? 3, n => params.onAttempt?.(offset + n));
+}
+
 export async function nimChat(params: ChatParams): Promise<string> {
-  return withRetry(
-    async () => {
-      const client = nimClient();
+  return withProviderFallback(params,
+    async (client, provider) => {
       const completion = await client.chat.completions.create(
-        requestBody(params),
-        { timeout: NIM_TIMEOUT_MS }
+        requestBody(params, undefined, provider),
+        { timeout: params.timeoutMs ?? NIM_TIMEOUT_MS, signal: params.signal }
       );
       const choice = completion.choices?.[0];
       if (choice?.finish_reason === "length") {
@@ -150,9 +242,7 @@ export async function nimChat(params: ChatParams): Promise<string> {
       }
       if (!choice?.message?.content) throw new Error("Model returned an empty response.");
       return choice.message.content;
-    },
-    params.tries ?? 3,
-    params.onAttempt
+    }
   );
 }
 
@@ -160,27 +250,37 @@ export async function nimChat(params: ChatParams): Promise<string> {
  * The hosted NIM gateway resets buffered connections past ~100s, so we
  * stream chunks and accumulate. Use this for draft and refine calls. */
 export async function nimChatLong(params: ChatParams): Promise<string> {
-  return withRetry(async () => {
-    // Allow long generations but bound connection setup below the route limit.
-    const client = nimClient();
-    const stream = await client.chat.completions.create(
-      requestBody(params, { stream: true }),
-      { timeout: 240_000 }
-    );
-    let out = "";
-    let finished = false;
-    for await (const chunk of stream) {
-      const choice = chunk.choices?.[0];
-      out += choice?.delta?.content ?? "";
-      if (choice?.finish_reason === "length") {
-        throw new Error("The model reached its output limit before finishing the JSON. Use a shorter word target.");
+  return withProviderFallback(params, async (client, provider) => {
+    // The SDK timeout only bounds stream setup. Bound the entire response as
+    // well, so a provider that stops sending chunks cannot consume the whole
+    // draft route's ten-minute budget before fallback gets a turn.
+    const limit = params.timeoutMs ?? 120_000;
+    const deadline = AbortSignal.timeout(limit);
+    const signal = params.signal ? AbortSignal.any([params.signal, deadline]) : deadline;
+    try {
+      const stream = await client.chat.completions.create(
+        requestBody(params, { stream: true }, provider),
+        { timeout: limit, signal }
+      );
+      let out = "";
+      let finished = false;
+      for await (const chunk of stream) {
+        const choice = chunk.choices?.[0];
+        out += choice?.delta?.content ?? "";
+        if (choice?.finish_reason === "length") {
+          throw new Error("The model reached its output limit before finishing the JSON. Use a shorter word target.");
+        }
+        if (choice?.finish_reason === "stop") finished = true;
       }
-      if (choice?.finish_reason === "stop") finished = true;
+      if (!finished) throw new Error("Model stream terminated before completing the response.");
+      if (!out) throw new Error("Model returned an empty stream.");
+      return out;
+    } catch (error) {
+      params.signal?.throwIfAborted();
+      if (deadline.aborted) throw new Error(`Model stream timed out after ${Math.ceil(limit / 1000)} seconds.`);
+      throw error;
     }
-    if (!finished) throw new Error("Model stream terminated before completing the response.");
-    if (!out) throw new Error("Model returned an empty stream.");
-    return out;
-  }, params.tries ?? 3, params.onAttempt);
+  });
 }
 
 /**
@@ -270,11 +370,11 @@ export async function completeJson<T extends z.ZodTypeAny>(
 ): Promise<z.output<T>> {
   let last: unknown = new Error("The model didn't return usable data. Try again.");
   const tries = params.parseTries ?? 2;
-  const perTry = params.tries ?? 3;
   const tempDelta = params.retryTempDelta ?? 0.2;
   let seen = 0;
   let feedback = "";
   let priorRaw = "";
+  let forceNvidia = params.provider === "nvidia";
   const responseFormat = params.responseFormat ?? zodResponseFormat(requiredOutputSchema(params.schema), "response");
   const report = (base: number) => (n: number) => {
     seen = Math.max(seen, base + n);
@@ -285,20 +385,29 @@ export async function completeJson<T extends z.ZodTypeAny>(
     try {
       raw =
         i === 0
-          ? await generate({ ...params, responseFormat, onAttempt: report(i * perTry) })
+          ? await generate({ ...params, ...(forceNvidia ? { provider: "nvidia" as const } : {}), responseFormat, onAttempt: report(seen) })
         : await generate({
             ...params,
+            ...(forceNvidia ? { provider: "nvidia" as const } : {}),
             responseFormat,
             user: feedback.toLowerCase().includes("malformed") || feedback.toLowerCase().includes("json")
               ? `${params.user}\n\nVALIDATION FAILURE:\n${feedback}\nThe previous output was malformed and could not be parsed as valid JSON. Return strictly valid RFC-8259 JSON matching the schema. Escape every quote inside prose strings (use \\") and ensure all brackets are properly closed.`
               : `${params.user}\n\nThe previous response is included below. Repair it instead of starting over. Preserve valid content and change only what is needed to pass validation.\n\nVALIDATION FAILURE:\n${feedback}\n\nPREVIOUS RESPONSE:\n${priorRaw.slice(0, 80_000)}\n\nReturn one complete corrected JSON object matching the required schema. Preserve source IDs and escape quotes and newlines inside JSON strings.`,
             temperature: Math.min(1, Math.max(0.1, (params.temperature ?? 0.6) + i * tempDelta)),
-            onAttempt: report(i * perTry),
+            onAttempt: report(seen),
           });
     } catch (e) {
       const m = e instanceof Error ? e.message : "request failed";
       // Transport retries already happen inside nimChat/Long. Repeating
       // them once per JSON repair can turn an outage into a very long wait.
+      // A composite draft can contain several completeJson calls. Preserve
+      // an already classified service error instead of wrapping it again.
+      if (m.startsWith("Model service error (") || m.startsWith("Rate limit reached (")) throw e;
+      if (getStatus(e) === 429 || /429/.test(m)) {
+        const wait = getRetryAfterMs(e);
+        const hint = wait > 0 ? ` Wait about ${Math.ceil(wait / 1000)}s, then try again.` : " Wait a bit, then try again.";
+        throw new Error(`Rate limit reached (${m}).${hint}`);
+      }
       throw new Error(`Model service error (${m}). Try again in a bit.`);
     }
     let value: z.output<T> | undefined;
@@ -307,6 +416,10 @@ export async function completeJson<T extends z.ZodTypeAny>(
       await params.validate?.(value);
       return value;
     } catch (e) {
+      // A verifier can itself call the provider. An outage there is not
+      // invalid essay content and must not restart the entire composition.
+      if (e instanceof Error && e.message.startsWith("Model service error (")) throw e;
+      if ((generate === nimChat || generate === nimChatLong) && process.env.OPENROUTER_API_KEY) forceNvidia = true;
       priorRaw = value !== undefined && params.repairResponse ? params.repairResponse(value) : raw;
       last = e instanceof z.ZodError
         ? new Error(`The model returned invalid fields: ${e.issues.slice(0, 3).map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}. Try again.`)

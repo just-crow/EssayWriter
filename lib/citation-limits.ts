@@ -1,8 +1,12 @@
 import type { EssayDraft } from "./essay-types";
-import { normalizeUrl } from "./search";
+import { workIdentity } from "./work-identity";
+
+export function assertUncitedConclusion(draft: EssayDraft) {
+  if (draft.conclusion.some(paragraph => /\[\^[^\]]+\]/.test(paragraph))) throw new Error("The conclusion must contain no citations. Restate the thesis and synthesize only points already established in the introduction and body, without new information.");
+}
 
 export function citationCounts(draft: EssayDraft) {
-  const notes = new Map(draft.footnotes.map((note) => [note.id, normalizeUrl(note.url)]));
+  const notes = new Map(draft.footnotes.map((note) => [note.id, workIdentity(note)]));
   const works = new Set<string>();
   let footnotes = 0;
   for (const paragraph of [...draft.introduction, ...draft.sections.flatMap((section) => section.paragraphs), ...draft.conclusion]) {

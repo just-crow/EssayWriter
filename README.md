@@ -6,6 +6,16 @@ Copy `.env.example` to `.env.local` and fill in `NVIDIA_NIM_API_KEY`,
 `TAVILY_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, and `SUPABASE_SECRET_KEY`
 (find the last two under Supabase dashboard → Project Settings → Data API).
 
+Set `OPENROUTER_API_KEY` in `.env.local` to use
+`openai/gpt-6-luna` as the primary text model. This OpenRouter model is billed
+per token. Requests fall back to NVIDIA Nemotron 3 Super on provider failures.
+Without the OpenRouter key, text requests use NVIDIA directly. Keep both keys
+on the server, out of Git.
+
+Draft paragraphs and source-audit batches run sequentially. Transient
+overloads retry with increasing delays. The NVIDIA fallback is independent
+of OpenRouter's Luna providers.
+
 Create the tables once: open Supabase dashboard → SQL Editor → run the
 statements in `supabase/schema.sql`. Without them (or without keys) the app
 keeps working on an in-memory fallback, but nothing persists across restarts.

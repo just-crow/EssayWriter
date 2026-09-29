@@ -8,6 +8,8 @@ export type WebSource = {
   score: number;
   /** The query text that surfaced this result. */
   query: string;
+  /** Every query that returned this page, retained through URL deduplication. */
+  queries?: string[];
 };
 
 import type { SourceItem } from "./essay-types";
@@ -52,6 +54,8 @@ export function buildSources(
       year: yearFrom(w.date),
       url: w.url,
       accessed,
+      // Search hits are candidates, not proof that one page supports every
+      // section whose query returned it. Show only its strongest query match.
       supports: `Relevant to ${labels.get(w.query) ?? "general background"}`,
       kind: kindForHost(host || w.publisher),
       content: "",
@@ -61,12 +65,14 @@ export function buildSources(
 
 /** Per-query upper bound so one slow search cannot hang the whole stage. */
 const QUERY_TIMEOUT_MS = 20_000;
-const MAX_QUERIES = 6;
+const MAX_QUERIES = 18;
 
 /** Per-extract upper bound so page fetching cannot hang the stage. */
 const EXTRACT_TIMEOUT_MS = 30_000;
-/** Max characters of page text kept per source (bounds prompt size). */
-export const MAX_SOURCE_CHARS = 10000;
+/** Retain long articles while bounding storage and verifier prompt size. */
+export const MAX_SOURCE_CHARS = 100_000;
+/** Eighteen pages plus JSON escaping and source metadata. */
+export const MAX_SOURCES_JSON_CHARS = 4_000_000;
 
 /** Normalize for membership checks: lowercase host, trim trailing slash,
  * drop tracking params and fragments. */
@@ -174,6 +180,7 @@ async function oneQuery(
     body: JSON.stringify({
       api_key: key,
       query,
+      queries: [query],
       search_depth: "advanced",
       max_results: maxPerQuery,
       include_answer: false,
@@ -236,7 +243,12 @@ export async function liveSearch(
     const n = normalizeUrl(s.url);
     if (!n) continue;
     const prev = best.get(n);
-    if (!prev || s.score > prev.score) best.set(n, s);
+    if (!prev) {
+      best.set(n, s);
+      continue;
+    }
+    const queries = [...new Set([...(prev.queries ?? [prev.query]), ...(s.queries ?? [s.query])])];
+    best.set(n, { ...(s.score > prev.score ? s : prev), queries });
   }
   return [...best.values()].sort((a, b) => qualityWeight(b) - qualityWeight(a));
 }

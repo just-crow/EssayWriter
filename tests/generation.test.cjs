@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const { z } = require("zod");
 const { parseModelJson, completeJson, nimChatLong, nimClient } = require("../lib/nim.ts");
 const { DraftSchema, writerDraftSchema } = require("../lib/essay-types.ts");
-const { prepareDraft, verifyEvidence, sourcesTextMap, expandFootnoteUses, repairEvidenceQuotes, splitSentences } = require("../lib/validate.ts");
+const { prepareDraft, verifyEvidence, sourcesTextMap, expandFootnoteUses, repairEvidenceQuotes, splitSentences, validateDraft } = require("../lib/validate.ts");
 const { buildDocx } = require("../lib/docx-build.ts");
 const JSZip = require("jszip");
 
@@ -12,11 +12,15 @@ test("essay word count excludes headings and citation markers", () => {
   assert.equal(countWords(draft({ introduction: ['One two.[^1]'], sections: [{ heading: 'A long heading excluded from the count', paragraphs: ['Three [^2] four.'] }], conclusion: ['Five.'] })), 5);
 });
 
-test("word-count padding by recycled source sentences is rejected despite different citations", () => {
-  const { assertNoRepeatedSentences } = require("../lib/validate.ts");
+test("repeated wording can be detected without rejecting the essay", () => {
+  const { repeatedSentences } = require("../lib/validate.ts");
   const sentence = "The course introduces mathematical proofs through logic, sets, functions, induction, and combinatorics for incoming computing students.";
-  assert.throws(() => assertNoRepeatedSentences(draft({ introduction: [sentence + "[^1]"], sections: [{ heading: "Body", paragraphs: [sentence + "[^2]"] }], conclusion: [sentence + "[^3]"] })), /repeats substantial sentences/);
-  assert.doesNotThrow(() => assertNoRepeatedSentences(draft({ introduction: [sentence], conclusion: ["This proposal should be evaluated through a pilot before drawing conclusions about learning outcomes."] })));
+  assert.equal(repeatedSentences([sentence + "[^1]", sentence + "[^2]", sentence + "[^3]"]).length, 2);
+});
+
+test("a short audited paragraph is reported for review rather than discarded", () => {
+  const issues = validateDraft(draft({ sections: [{ heading: 'Argument', paragraphs: ['One supported point remains.[^7] It still belongs in this section.'] }] }));
+  assert.ok(issues.some(issue => issue.code === 'SHORT_PARAGRAPH'));
 });
 
 const url = "https://example.org/source";
@@ -179,32 +183,35 @@ test("citation and JSON failures retry with actionable correction feedback", asy
   await assert.rejects(() => completeJson({ system: "JSON", user: "JSON", schema: z.object({ name: z.string() }) }, async () => '{"name":42}'), /invalid fields: name/);
 });
 
-test("provider citation grammar allows full paragraphs and requires structured fields", async () => {
+test("writer schema permits ordinary prose formatting and requires structured fields", async () => {
   let request;
   const schema = writerDraftSchema();
   await completeJson({ system: "Write", user: "Write", schema }, async (params) => {
     request = params;
-    return JSON.stringify(draft({ introduction: ["Opening.[^1]"], sections: [{ heading: "Body", paragraphs: ["Finding.[^1]"] }], conclusion: ["Conclusion.[^1]"] }));
+    return JSON.stringify(draft({ introduction: ["Opening.[^1]"], sections: [{ heading: "Body", paragraphs: ["Finding.[^1]"] }], conclusion: ["Conclusion."] }));
   });
   const format = request.responseFormat;
   assert.equal(format.type, "json_schema");
   const json = format.json_schema.schema;
-  const pattern = json.properties.introduction.items.pattern;
-  assert.ok(new RegExp(`^(?:${pattern})$`).test("A complete factual sentence.[^1] Analysis follows."));
-  assert.ok(!new RegExp(pattern).test("An uncited paragraph."));
+  assert.equal(json.properties.introduction.items.type,"string");
+  assert.equal(json.properties.introduction.items.pattern,undefined);
+  const prose='The source describes "targeted editing".[^1]\nIts implications require careful evaluation.';
+  const parsed=schema.parse(draft({introduction:[prose],sections:[{heading:'Analysis',paragraphs:['These competing considerations warrant a cautious judgment.']}],conclusion:['The judgment follows the established discussion.']}));
+  assert.equal(parsed.introduction[0],prose);
+  assert.equal(parsed.sections[0].paragraphs.length,1);
   assert.ok(json.required.includes("sections"));
   assert.equal(json.properties.sections.items.additionalProperties, false);
 });
 
 test("writer sentence arrays and single paragraphs normalize without losing citations", () => {
   const normalized = writerDraftSchema().parse({
-    title:"Course", introduction:"Intro.[^1]", conclusion:[["Closing.[^1]","A recommendation follows."]],
+    title:"Course", introduction:"Intro.[^1]", conclusion:[["Closing.","The argument is synthesized."]],
     sections:[{heading:"Evidence",paragraphs:[["A source finding.[^1]","Its interpretation follows."]]}],
     footnotes:{malformed:"model metadata is ignored in initial drafts"}, worksCited:42, evidence:"invented",
   });
   assert.deepEqual(normalized.introduction,["Intro.[^1]"]);
   assert.deepEqual(normalized.sections[0].paragraphs,["A source finding.[^1] Its interpretation follows."]);
-  assert.deepEqual(normalized.conclusion,["Closing.[^1] A recommendation follows."]);
+  assert.deepEqual(normalized.conclusion,["Closing. The argument is synthesized."]);
   assert.deepEqual(normalized.footnotes,[]);
 });
 
@@ -233,6 +240,53 @@ test("exhausted service retries are not multiplied by JSON repair attempts", asy
     throw new Error("Service temporarily overloaded");
   }), /Model service error.*overloaded/);
   assert.equal(calls,1);
+});
+
+test("nested draft composition preserves a single service error", async () => {
+  await assert.rejects(() => completeJson({ system: 'JSON', user: 'JSON', schema: z.object({ ok: z.boolean() }) }, () =>
+    completeJson({ system: 'JSON', user: 'JSON', schema: z.object({ ok: z.boolean() }) }, async () => {
+      throw new Error('Service temporarily overloaded');
+    })
+  ), error => {
+    assert.equal(error.message, 'Model service error (Service temporarily overloaded). Try again in a bit.');
+    return true;
+  });
+});
+
+test("an audit service outage does not regenerate an already written essay", async () => {
+  let generations = 0, audits = 0;
+  await assert.rejects(() => completeJson({
+    system: 'JSON', user: 'JSON', schema: z.object({ ok: z.boolean() }), parseTries: 3,
+    validate: async () => {
+      audits++;
+      throw new Error('Model service error (Service temporarily overloaded). Try again in a bit.');
+    },
+  }, async () => { generations++; return '{"ok":true}'; }), /Model service error.*overloaded/);
+  assert.equal(generations, 1);
+  assert.equal(audits, 1);
+});
+
+test("overload retries use increasing delays and honor provider retry-after", async () => {
+  const { withRetry } = require('../lib/nim.ts');
+  const originalTimer = global.setTimeout;
+  const delays = [], attempts = [];
+  let calls = 0;
+  global.setTimeout = (callback, delay) => { delays.push(delay); callback(); };
+  try {
+    const result = await withRetry(async () => {
+      if (++calls < 4) throw new Error('Service temporarily overloaded');
+      return 'recovered';
+    }, 4, n => attempts.push(n));
+    assert.equal(result, 'recovered');
+    assert.deepEqual(attempts, [1, 2, 3, 4]);
+    assert.deepEqual(delays, [2000, 4000, 8000]);
+    calls = 0;
+    await withRetry(async () => {
+      if (++calls === 1) throw Object.assign(new Error('Busy'), { status: 429, headers: new Headers({ 'retry-after': '7' }) });
+      return 'recovered';
+    }, 2);
+    assert.equal(delays.at(-1), 7000);
+  } finally { global.setTimeout = originalTimer; }
 });
 
 test("streaming honors reasoning toggle, retry options and rejects truncated output", async () => {

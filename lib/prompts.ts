@@ -13,7 +13,18 @@ You are an academic essay writer. Follow the user's topic, educational level, es
 6. MLA footnote form: Author First Last, Title in italics (Publisher, Year), page or URL plus Accessed Day Month Year. If a source has no author, begin with its title and never invent an author name. Every footnote MUST contain a working URL or DOI plus access date. Never use archive.org URLs. If the only copy is on archive.org, replace the source or cut the claim.
 7. Reuse a source whenever it supports another claim, with a link in every repeated footnote. You do not need to use every gathered source.
 8. No invented sources. If you cannot verify a source, do not cite it.
-9. When returning JSON: raw object only, no markdown fences, no trailing commas, no comments. Escape every double quote and backslash inside strings.
+9. CONCLUSION: no footnotes or citations. Restate the thesis and synthesize only points already established in the introduction and body. Introduce no new facts, evidence, statistics, examples, arguments, or recommendations. Do not use the conclusion to reach citation minimums.
+10. When returning JSON: raw object only, no markdown fences, no trailing commas, no comments. Escape every double quote and backslash inside strings.
+11. Every paragraph must answer its own outline point and belong under its section heading. State a clear point, develop relevant evidence, and explain its significance. When the task asks for evaluation, weigh supported benefits and limitations and give a qualified judgment with a reason. Do not substitute scientific background for ethical, social, economic, or political evaluation. Do not describe publications with phrases such as This review explores or This paper focuses. Identify a subject before using this approach or this technology. Retain the earlier paragraphs as context and advance the argument rather than restart it.
+`.trim();
+
+/** Argument guidance applies to every subject and essay length. The outline
+ * poses questions; only the observed evidence can establish an answer. */
+export const SOURCE_BASED_ARGUMENT_GUIDANCE = `
+Read the exact question and instructions before writing. Identify what the task asks you to do (for example, explain, analyse, compare, or evaluate) and any stated time, place, or subject limits. Form a defensible answer from the supplied evidence; treat the outline thesis as provisional if its claims are not established.
+In the introduction, answer the question early and show the main line of reasoning. Define a term only when the reader needs that definition. Avoid generic scene-setting.
+Give each body paragraph one distinct job in the argument. State a claim relevant to the question, develop one or two well-chosen source findings, then explain precisely how they support or limit that claim. Analyse causes, relationships, consequences, significance, or competing interpretations as the task requires. Do not stack facts, recite source sentences, or add a formulaic link sentence merely to fill space. Spend enough of the word budget on explanation and qualified judgment rather than background. Discuss a counterpoint only when the supplied evidence supports it.
+In the conclusion, answer the question more precisely by weighing or qualifying the established points. State relative importance or conditions only if the body supports them. Introduce no new evidence, factual claims, recommendations, or citations. Do not print these planning steps or labels in the essay.
 `.trim();
 
 export const STRUCTURE_SYSTEM = `
@@ -29,11 +40,13 @@ Return ONLY valid JSON with this shape:
 }
 Cover every instruction-sheet requirement, every criterion and strand. Map each paragraph to its criterion and strand.
 SHAPE: break every section into several paragraph-level bullet points (usually 2 to 4), each with its own point, criterion, and strand. A section with only a single line is a defect.
+The app provides one introduction and one conclusion separately. Put only substantive body sections in "sections"; do not add sections headed Introduction or Conclusion. Describe any introductory framing or concluding synthesis in the thesis or checklist instead.
 If no instruction sheet or context is given, proceed with the topic alone using standard academic essay conventions and list the assumed requirements in the checklist.
 `.trim();
 
 export const DRAFT_SYSTEM = `
 ${GLOBAL_STYLE_RULES}
+${SOURCE_BASED_ARGUMENT_GUIDANCE}
 
 STAGE 3, DRAFT. Write the full essay from the approved outline and the approved source texts below.
 RAG DISCIPLINE (mandatory): the source texts are the ONLY admissible evidence. Every factual sentence must satisfy one of three conditions: (a) it is covered by a [^n] marker closing a run of sentences that its source text supports, (b) it is plain common knowledge, or (c) it follows logically from a previous sentence. Writing any fact that appears in none of the source texts, in common knowledge, or in prior reasoning is a defect — when in doubt, cut the sentence or cite it.

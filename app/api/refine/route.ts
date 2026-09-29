@@ -4,13 +4,13 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema, WriterDraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, prepareDraft, sourcesTextMap, assertNoRepeatedSentences, splitSentences } from "@/lib/validate";
+import { validateDraft, prepareDraft, sourcesTextMap, splitSentences } from "@/lib/validate";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
 import type { SourceItem } from "@/lib/essay-types";
 import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
 import { auditAndAlignGrounding } from "@/lib/grounding-audit";
-import { assertCitationMinimums } from "@/lib/citation-limits";
+import { assertCitationMinimums, assertUncitedConclusion } from "@/lib/citation-limits";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -48,8 +48,10 @@ export async function POST(req: Request) {
     // model works from existing footnotes plus common knowledge.
     const citedUrls = new Set<string>();
     let maxFnId = 0;
+    let baseEssayForWriter = base.essayJson;
     try {
       const baseDraft = DraftSchema.parse(JSON.parse(base.essayJson));
+      baseEssayForWriter = JSON.stringify({...baseDraft, diagnostics: undefined});
       for (const f of baseDraft.footnotes) {
         if (f.url) citedUrls.add(normalizeUrl(f.url));
         if (typeof f.id === "number" && f.id > maxFnId) maxFnId = f.id;
@@ -116,7 +118,7 @@ export async function POST(req: Request) {
     const draft = await completeJson(
       {
         system: REFINE_SYSTEM,
-        user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\nMinimum footnotes: ${body.minimumFootnotes}\nMinimum distinct cited works: ${body.minimumSources}\nDevelop factual findings from at least this many different source URLs before writing. Cite at least the requested number of separate factual sentences; These are minimums, not exact counts or caps: you may use more footnotes and more distinct works when they support the essay. Do not add decorative citations.\n\nCurrent essay JSON:\n${base.essayJson}\n\nExisting source texts:\n${JSON.stringify(dbSources.filter((s) => body.minimumSources > citedUrls.size || citedUrls.has(normalizeUrl(s.url))).map(({ title, url, content }) => ({ title, url, content })))}\n\nUser revision instruction:\n${body.instruction}\n\n${sourceBlock}\n\nReturn the revised essay JSON now.`,
+        user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\nMinimum footnotes: ${body.minimumFootnotes}\nMinimum distinct cited works: ${body.minimumSources}\nDevelop factual findings from at least this many different source URLs before writing. Cite at least the requested number of separate factual sentences; These are minimums, not exact counts or caps: you may use more footnotes and more distinct works when they support the essay. Do not add decorative citations.\n\nCurrent essay JSON:\n${baseEssayForWriter}\n\nExisting source texts:\n${JSON.stringify(dbSources.filter((s) => body.minimumSources > citedUrls.size || citedUrls.has(normalizeUrl(s.url))).map(({ title, url, content }) => ({ title, url, content })))}\n\nUser revision instruction:\n${body.instruction}\n\n${sourceBlock}\n\nReturn the revised essay JSON now.`,
         temperature: 1,
         maxTokens: Math.min(32768, Math.max(12000, project.wordTarget * 3 + 6000)),
         schema: WriterDraftSchema,
@@ -126,7 +128,9 @@ export async function POST(req: Request) {
         retryTempDelta: 0,
         validate: async (d) => {
           prepareDraft(d, sourcesText, { deferEvidence: true });
+          assertUncitedConclusion(d);
           const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources]);
+          assertUncitedConclusion(d);
           assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
           const bodyEnd = d.introduction.length + d.sections.flatMap((section) => section.paragraphs).length;
           const bodyClaims = new Set(d.evidence.filter((item) => item.paragraph >= d.introduction.length && item.paragraph < bodyEnd).map((item) => item.source));
@@ -137,7 +141,6 @@ export async function POST(req: Request) {
             ? ` The source audit removed these unsupported claims; replace them only with directly supported statements:\n${audit.removed.slice(0, 8).join("\n")}`
             : "";
           const words = countWords(d);
-          assertNoRepeatedSentences(d);
           if (Math.abs(words - project.wordTarget) > 400) {
             throw new Error(`The grounded revision is ${words} words. Keep it within 400 words of the ${project.wordTarget}-word target.${removed}`);
           }

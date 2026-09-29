@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { type SourceItem } from "@/lib/essay-types";
-import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
+import { liveSearch, normalizeUrl, extractPages, buildSources, type WebSource } from "@/lib/search";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -31,32 +31,75 @@ export interface SourcesResult {
   liveHits: number;
 }
 
+/** Give every section a search before spending queries on individual points. */
+export function planSourceQueries(topic: string, structureJson: string): Array<{ text: string; label: string }> {
+  const general = { text: topic, label: "general background" };
+  try {
+    const structure = JSON.parse(structureJson) as {
+      sections?: Array<{ heading?: string; paragraphs?: Array<{ point?: string }> }>;
+    };
+    const sections = (structure.sections ?? []).filter((section) => section.heading?.trim());
+    if (!sections.length) return [general];
+    const searchStopwords = new Set("about advantages and benefits challenges effects essay evaluation impact limitations of on planning role the with".split(" "));
+    const subject = (topic.toLowerCase().match(/[\p{L}\p{N}-]+/gu) ?? [])
+      .filter((word) => word.length > 2 && !searchStopwords.has(word)).slice(0, 10).join(" ") || topic;
+    const headingQueries = sections.map((section) => ({
+      text: `${subject} ${section.heading}`.trim(),
+      label: `the section “${section.heading}”`,
+    }));
+    const pointQueries = [0, 1].flatMap((index) => sections.flatMap((section) => {
+      const point = section.paragraphs?.[index]?.point?.replace(/^Question to investigate:\s*/i, "").trim();
+      return point ? [{ text: `${subject} ${point.slice(0, 140)}`, label: `the section “${section.heading}”` }] : [];
+    }));
+    const unique = new Map<string, { text: string; label: string }>();
+    for (const query of [...headingQueries, general, ...pointQueries]) {
+      if (!unique.has(query.text)) unique.set(query.text, query);
+    }
+    return [...unique.values()].slice(0, 18);
+  } catch {
+    return [general];
+  }
+}
+
+/** Reserve pages found for each section, then fill remaining slots by rank. */
+export function selectBalancedSources(
+  results: WebSource[],
+  queries: Array<{ text: string; label: string }>,
+  needed: number
+): WebSource[] {
+  // A category or search page can be useful when a section has no other hit,
+  // but it should not take a slot from a substantive page for that section.
+  const isListing = (result: WebSource) => {
+    try { return /(?:^|\/)(?:category|tag|topics|search)(?:\/|$)/i.test(new URL(result.url).pathname); }
+    catch { return false; }
+  };
+  const ranked = [...results].sort((a, b) => Number(isListing(a)) - Number(isListing(b)));
+  const sections = [...new Set(queries.map((query) => query.label).filter((label) => label !== "general background"))];
+  const queryLabels = new Map(queries.map((query) => [query.text, query.label]));
+  const chosen: WebSource[] = [];
+  const used = new Set<string>();
+  const add = (result: WebSource | undefined) => {
+    if (!result || chosen.length >= needed) return;
+    const url = normalizeUrl(result.url);
+    if (url && !used.has(url)) { used.add(url); chosen.push(result); }
+  };
+  for (let round = 0; round < 2 && chosen.length < needed; round++) {
+    for (const label of sections) {
+      const strongest = ranked.find((result) => queryLabels.get(result.query) === label && !used.has(normalizeUrl(result.url)));
+      const broader = ranked.find((result) => (result.queries ?? [result.query])
+        .some((query) => queryLabels.get(query) === label) && !used.has(normalizeUrl(result.url)));
+      add(strongest ?? broader);
+    }
+  }
+  for (const result of ranked) add(result);
+  return chosen;
+}
+
 export async function runSourcesPipeline(
   input: SourcesInput,
   reportStage?: (s: string) => void
 ): Promise<SourcesResult> {
-  // Derive search queries from outline points, keeping the outline label
-  // each query came from so sources map back to sections deterministically.
-  let qlist: Array<{ text: string; label: string }> = [
-    { text: input.topic, label: "general background" },
-  ];
-  try {
-    const s = JSON.parse(input.structureJson) as {
-      sections?: Array<{ heading?: string; paragraphs?: Array<{ point?: string }> }>;
-    };
-    const pts = (s.sections ?? []).flatMap((sec) => {
-      const label = sec.heading ? `the section “${sec.heading}”` : "general background";
-      return [
-        { text: `${input.topic} ${sec.heading ?? ""}`.trim(), label },
-        ...((sec.paragraphs ?? [])
-          .slice(0, 2)
-          .map((p) => ({ text: `${input.topic} ${p.point ?? ""}`.trim(), label }))),
-      ];
-    });
-    if (pts.length > 0) qlist = pts;
-  } catch {
-    // keep default
-  }
+  const qlist = planSourceQueries(input.topic, input.structureJson);
   const labels = new Map(qlist.map((q) => [q.text, q.label]));
 
   reportStage?.("Searching the web…");
@@ -74,10 +117,10 @@ export async function runSourcesPipeline(
     );
   }
 
-  // Deterministic shortlist: best Tavily scores first, capped at target.
+  // Deterministic shortlist: represent each searched section before global rank.
   // No model involved — every field below is observed or explicitly empty.
   const target = Math.min(input.needed, web.length);
-  const shortlist = web.slice(0, target);
+  const shortlist = selectBalancedSources(web, qlist, target);
   const allowed = new Set(shortlist.map((w) => normalizeUrl(w.url)));
   const built = buildSources(shortlist, labels, today);
 

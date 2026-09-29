@@ -125,6 +125,13 @@ export const translations = {
     nothingToCheckHint: "Style and link checks appear here after the first draft.",
     noValidationIssues: "No reported style or citation-format issues.",
     coverageHeading: "Coverage",
+    draftTraceHeading: "Draft trace",
+    draftTraceHint: "Word counts before and after source checks show where content was lost.",
+    draftTracePlanned: "Evidence supplied to the writer",
+    draftTraceFindings: "findings",
+    draftTraceWorks: "works",
+    draftTraceRepair: "Verified expansion",
+    draftTraceRemoved: "Removed claims and reasons",
 
     // Preview
     previewHeading: "Essay preview",
@@ -301,6 +308,13 @@ export const translations = {
     nothingToCheckHint: "Provjera stila i referenci pojavit će se ovdje nakon prvog nacrta.",
     noValidationIssues: "Nema prijavljenih problema sa stilom ili formatom citiranja.",
     coverageHeading: "Pokrivenost",
+    draftTraceHeading: "Tok izrade nacrta",
+    draftTraceHint: "Broj riječi prije i poslije provjere izvora pokazuje gdje je sadržaj izgubljen.",
+    draftTracePlanned: "Dokazi dati piscu",
+    draftTraceFindings: "nalaza",
+    draftTraceWorks: "izvora",
+    draftTraceRepair: "Provjereno proširenje",
+    draftTraceRemoved: "Uklonjene tvrdnje i razlozi",
 
     // Preview
     previewHeading: "Pregled eseja",

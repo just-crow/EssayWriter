@@ -1,35 +1,35 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const nim = require("../lib/nim.ts");
-const writer = require("../lib/source-writer.ts");
+const writer = require("../lib/planned-writer.ts");
 const search = require("../lib/search.ts");
 const { prisma } = require("../lib/db.ts");
 const draftRoute = require("../app/api/draft/route.ts");
 const refineRoute = require("../app/api/refine/route.ts");
 const downloadRoute = require("../app/api/download/[id]/route.ts");
 const url = "https://example.org/source";
-const content = "An introductory statement. A supported claim. A concluding statement.";
+const content = "An introductory statement describes the observed water measurements. A supported claim concerns measurements of water under observation. These established observations conclude the discussion of measured water.";
 const modelDraft = {
-  title: 'Test essay “Water” – Ż', introduction: ["An introductory statement.[^1]"],
-  sections: [{ heading: "Claim", paragraphs: ["A supported claim.[^1]"] }],
-  conclusion: ["A concluding statement.[^1]"], footnotes: [{ id: 1, title: "Source", url }],
-  evidence: [0, 1, 2].map((paragraph) => ({ paragraph, source: 1, quote: content })),
+  title: 'Test essay “Water” – Ż', introduction: ["An introductory statement describes the observed water measurements.[^1]"],
+  sections: [{ heading: "Claim", paragraphs: ["A supported claim concerns measurements of water under observation.[^1]"] }],
+  conclusion: ["These established observations conclude the discussion of measured water."], footnotes: [{ id: 1, title: "Source", url }],
+  evidence: [0, 1].map((paragraph) => ({ paragraph, source: 1, quote: content })),
 };
 const post = (body) => new Request("http://localhost/api", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 test("draft and repeated revisions preserve citations, source texts, project and version numbering", async () => {
   const originalChat = nim.nimChatLong;
-  const originalWriter = writer.composeSourceDraft;
-  writer.composeSourceDraft = async () => structuredClone(modelDraft);
+  const originalWriter = writer.composePlannedDraft;
+  writer.composePlannedDraft = async () => structuredClone(modelDraft);
   const originalSearch = search.liveSearch;
   const prompts = [];
   nim.nimChatLong = async (p) => {
     prompts.push(p);
-    return JSON.stringify(p.system.includes("select evidence before") ? { selections: [{ sourceIndex: 0, passageIndexes: [0] }] } : p.system.includes("source-grounding auditor") ? {
+    return JSON.stringify(p.system.includes("checking relevance") ? {decisions:JSON.parse(p.user.split('SENTENCES TO CHECK: ')[1].split('\nReturn ')[0]).flatMap(item=>item.sentences.map(sentence=>({paragraph:item.paragraph,sentenceIndex:sentence.sentenceIndex,relevant:true,reason:'Relevant.'})))} : p.system.includes("select evidence before") ? { selections: [{ sourceIndex: 0, passageIndexes: [0] }] } : (p.system.includes("source-grounding auditor") || p.system.startsWith("CONCLUSION CHECK:")) ? {
       claims: [
-        { paragraph: 0, sentence: "An introductory statement.", sentenceIndex: 0, status: "supported", supportingSourceIndex: 0, supportingPassageIndexes: [0], reason: "Test source." },
-        { paragraph: 1, sentence: "A supported claim.", sentenceIndex: 0, status: "supported", supportingSourceIndex: 0, supportingPassageIndexes: [0], reason: "Test source." },
-        { paragraph: 2, sentence: "A concluding statement.", sentenceIndex: 0, status: "supported", supportingSourceIndex: 0, supportingPassageIndexes: [0], reason: "Test source." },
+        { paragraph: 0, sentenceIndex: 0, status: "supported", supportingSourceIndex: 0, supportingPassageIndexes: [0], reason: "Test source." },
+        { paragraph: 1, sentenceIndex: 0, status: "supported", supportingSourceIndex: 0, supportingPassageIndexes: [0], reason: "Test source." },
+        { paragraph: 2, sentenceIndex: 0, status: "logical_inference", supportingSourceIndex: 0, supportingPassageIndexes: [0], reason: "Test source." },
       ],
     } : modelDraft);
   };
@@ -46,7 +46,10 @@ test("draft and repeated revisions preserve citations, source texts, project and
     const first = await firstResponse.json();
     assert.equal(firstResponse.status, 200, first.error);
     assert.equal(first.version, 1);
-    assert.equal(first.footnoteCount, 3);
+    assert.equal(first.footnoteCount, 2);
+    assert.deepEqual(first.draft.diagnostics.stages.map(stage => stage.stage),
+      ['Writer','Topic review','Source verification','Citation check','Final']);
+    assert.equal(first.draft.diagnostics.plan.length,2);
     const download = await downloadRoute.GET(new Request("http://localhost/api/download"), { params: Promise.resolve({ id: first.versionId }) });
     assert.equal(download.status, 200);
     assert.match(download.headers.get("Content-Disposition"), /filename\*=UTF-8''/);
@@ -70,7 +73,7 @@ test("draft and repeated revisions preserve citations, source texts, project and
     assert.equal(mismatch.status, 400);
   } finally {
     nim.nimChatLong = originalChat;
-    writer.composeSourceDraft = originalWriter;
+    writer.composePlannedDraft = originalWriter;
     search.liveSearch = originalSearch;
   }
 });

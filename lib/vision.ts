@@ -3,9 +3,8 @@ import { nimClient, withRetry, NIM_TIMEOUT_MS } from "./nim";
 
 /**
  * Vision model used to transcribe attached pictures into context text.
- * The main essay model (nemotron-3-super) rejects multimodal input, so
- * images are converted to text once at upload time and the pipeline
- * continues to work with text only.
+ * Images are converted to text once at upload time so the source-first
+ * writing pipeline has one consistent text input on both model providers.
  */
 export const NIM_VISION_MODEL = "meta/llama-3.2-11b-vision-instruct";
 

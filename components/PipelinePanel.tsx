@@ -1,6 +1,7 @@
 "use client";
 
 import type { EssayStructure, SourceItem, ValidationIssue } from "./studio-types";
+import type { DraftDiagnostics } from "@/lib/draft-diagnostics";
 import { buildCriteriaMap, criteriaForSource } from "./criteriaMap";
 import { useLanguage } from "./LanguageContext";
 
@@ -31,6 +32,7 @@ interface PipelinePanelProps {
   onReopenSources: () => void;
   issues: ValidationIssue[];
   coverage: CoverageItem[];
+  diagnostics?: DraftDiagnostics;
   hasDraft: boolean;
 }
 
@@ -86,6 +88,7 @@ export default function PipelinePanel(props: PipelinePanelProps) {
     onReopenSources,
     issues,
     coverage,
+    diagnostics,
     hasDraft,
   } = props;
 
@@ -451,6 +454,37 @@ export default function PipelinePanel(props: PipelinePanelProps) {
               ))}
             </ul>
           </div>
+        ) : null}
+
+        {diagnostics ? (
+          <details className="mt-4 rounded-lg border border-stone-200 p-3 text-sm dark:border-stone-700">
+            <summary className="cursor-pointer font-semibold text-stone-800 dark:text-stone-200">{t("draftTraceHeading")}</summary>
+            <p className="mt-2 text-xs text-stone-600 dark:text-stone-400">{t("draftTraceHint")}</p>
+            <ul className="mt-3 space-y-2 text-xs text-stone-700 dark:text-stone-300">
+              {diagnostics.stages.map((stage, index) => (
+                <li key={`${stage.stage}-${index}`}>
+                  <strong>{stage.stage}: {stage.words} {t("statWords").toLowerCase()}</strong>
+                  <span className="block text-stone-500 dark:text-stone-400">
+                    {stage.parts.map(part => `${part.heading} ${part.words}`).join(" · ")}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs font-semibold text-stone-800 dark:text-stone-200">{t("draftTracePlanned")}</p>
+            <ul className="mt-1 space-y-1 text-xs text-stone-600 dark:text-stone-400">
+              {diagnostics.plan.map((item, index) => <li key={index}>{item.heading}: {item.findings} {t("draftTraceFindings")}, {item.works} {t("draftTraceWorks")}</li>)}
+            </ul>
+            {diagnostics.depthRepair ? <p className="mt-3 text-xs text-stone-700 dark:text-stone-300">
+              {t("draftTraceRepair")}: +{diagnostics.depthRepair.addedWords} {t("statWords").toLowerCase()}
+              {diagnostics.depthRepair.reason ? ` — ${diagnostics.depthRepair.reason}` : ""}
+            </p> : null}
+            {diagnostics.removed.length > 0 ? <>
+              <p className="mt-3 text-xs font-semibold text-stone-800 dark:text-stone-200">{t("draftTraceRemoved")}</p>
+              <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-stone-600 dark:text-stone-400">
+                {diagnostics.removed.map((reason, index) => <li key={index}>{reason}</li>)}
+              </ul>
+            </> : null}
+          </details>
         ) : null}
       </section>
     </div>

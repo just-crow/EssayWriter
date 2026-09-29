@@ -10,20 +10,24 @@ import {
   sourcesTextMap,
   splitSentences,
   consolidateSectionParagraphs,
-  assertNoRepeatedSentences,
 } from "@/lib/validate";
 import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
-import { normalizeUrl } from "@/lib/search";
+import { normalizeUrl, MAX_SOURCES_JSON_CHARS } from "@/lib/search";
 import { auditAndAlignGrounding } from "@/lib/grounding-audit";
-import { selectWritingEvidence } from "@/lib/evidence-plan";
-import { evidenceSpine } from "@/lib/evidence-spine";
-import { composeSourceDraft } from "@/lib/source-writer";
+import { buildWritingPlan, composePlannedDraft } from "@/lib/planned-writer";
+import { structuralSectionRole } from "@/lib/paragraph-plan";
+import { removeOffTopicProse } from "@/lib/topic-relevance";
 import { groupCitationRuns } from "@/lib/citation-runs";
-import { assertCitationMinimums } from "@/lib/citation-limits";
+import { assertCitationMinimums, assertUncitedConclusion, citationCounts } from "@/lib/citation-limits";
+import { workIdentity } from "@/lib/work-identity";
+import { repairCitationMinimums } from "@/lib/citation-repair";
+import { repairParagraphDepth } from "@/lib/paragraph-depth-repair";
+import { plannedEvidence, snapshotDraft, type DraftDiagnostics } from "@/lib/draft-diagnostics";
+import { ensureEssayEnds } from "@/lib/essay-endings";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 660;
 
 const Body = z.object({
   topic: z.string().min(1).max(500),
@@ -33,11 +37,12 @@ const Body = z.object({
   minimumFootnotes: z.number().int().min(1).max(30).default(1),
   minimumSources: z.number().int().min(1).max(18).default(1),
   structureJson: z.string().min(2).max(30000),
-  sourcesJson: z.string().min(2).max(200000),
+  sourcesJson: z.string().min(2).max(MAX_SOURCES_JSON_CHARS),
   projectId: z.string().nullish(),
 });
 
 export async function POST(req: Request) {
+  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(600_000)]);
   try {
     const body = Body.parse(await req.json());
     try {
@@ -53,18 +58,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "The source list is invalid. Gather sources again before drafting." }, { status: 400 });
     }
     if (sourceItems.length === 0) return NextResponse.json({ error: "Gather sources before drafting." }, { status: 400 });
-    const availableWorks = new Set(sourceItems.filter((source) => source.content.trim().length >= 40).map((source) => normalizeUrl(source.url))).size;
+    const availableWorks = new Set(sourceItems.filter((source) => source.content.trim().length >= 40).map(workIdentity).filter(Boolean)).size;
     if (availableWorks < body.minimumSources) return NextResponse.json({ error: `Only ${availableWorks} distinct works have readable source text, but you requested ${body.minimumSources}. Gather more sources or lower the minimum cited works.` }, { status: 400 });
     const sourcesText = sourcesTextMap(sourceItems);
-    const selectedSources = await selectWritingEvidence(sourceItems, `${body.topic}\nTarget: ${body.wordTarget} words\nMinimum: ${body.minimumFootnotes} footnotes from ${body.minimumSources} distinct works\n${body.instructionText}\n${body.extraInstructions}\nOutline: ${body.structureJson}`, { minimumCharacters: body.wordTarget * 8, minimumSources: body.minimumSources });
+    // Planning needs the full observed bank. Global topic ranking previously
+    // discarded section-specific evidence before the writer ever saw it.
+    const selectedSources = sourceItems.filter(source => source.content.trim().length >= 40);
     const selectedWithIds = selectedSources.map((source, index) => ({ ...source, id: String(index + 1) }));
-    const findings = evidenceSpine(selectedWithIds, sourceItems, Math.max(12, Math.ceil(body.wordTarget / 20), body.minimumFootnotes), body.minimumSources);
-    const findingItems = JSON.parse(findings) as Array<{ sourceId: string; text: string }>;
-    // Compose from the concrete findings chosen before writing. Sending every
-    // peripheral selected page again lets promotional claims overwhelm this
-    // plan. The auditor still checks the original, unmodified page snapshots.
-    const writingSources = findingItems.length ? selectedWithIds.filter((source) => findingItems.some((item) => item.sourceId === source.id))
-      .map((source) => ({ ...source, content: findingItems.filter((item) => item.sourceId === source.id).map((item) => item.text).join("\n\n") })) : selectedWithIds;
+    const writingSources = selectedWithIds;
+    const plan = buildWritingPlan(body, writingSources);
+    const findings = JSON.stringify(plan);
+    const diagnostics: DraftDiagnostics = {plan: plannedEvidence(plan.tasks, plan.headings), stages: [], removed: []};
     if (new Set(writingSources.map((source) => normalizeUrl(source.url))).size < body.minimumSources) return NextResponse.json({ error: `The selected pages did not provide factual findings from ${body.minimumSources} distinct works. Gather stronger sources or lower the minimum cited works.` }, { status: 400 });
     const draft = await completeJson(
       {
@@ -77,7 +81,8 @@ export async function POST(req: Request) {
         // regex schema grammar can distort citations and paragraph strings.
         // Application schema, source checks and length checks still apply.
         responseFormat: { type: "json_object" },
-        parseTries: 3,
+        parseTries: 2,
+        signal,
         repairResponse: (d) => {
           // Retain the already verified prose on a length/depth repair.
           // Translate verifier footnotes back to the writer's fixed source
@@ -97,21 +102,59 @@ export async function POST(req: Request) {
         // Keep Nemotron's recommended sampling on correction attempts too.
         retryTempDelta: 0,
         validate: async (d) => {
+          diagnostics.stages = [snapshotDraft(d, "Writer")];
+          diagnostics.removed = [];
+          diagnostics.depthRepair = undefined;
+          if (d.sections.some(section => structuralSectionRole(section.heading) !== null)) {
+            throw new Error("Introduction and conclusion must appear only in their dedicated essay fields, not as cited body sections.");
+          }
           d.footnotes = writingSources.map((source) => ({
             id: Number(source.id), author: source.author, title: source.title,
             publisher: source.publisher || source.container, year: source.year,
             url: source.url, accessed: source.accessed,
           }));
           prepareDraft(d, sourcesText, { deferEvidence: true });
-          const audit = await auditAndAlignGrounding(d, sourceItems);
-          const removed = audit.removed.length > 0
-            ? ` The source audit removed these unsupported claims; replace them only with claims directly supported by the supplied page text:\n${audit.removed.slice(0, 8).join("\n")}`
+          assertUncitedConclusion(d);
+          const offTopic = await removeOffTopicProse(d, body.topic, signal, body.structureJson);
+          diagnostics.stages.push(snapshotDraft(d, "Topic review"));
+          const audit = await auditAndAlignGrounding(d, sourceItems, { signal, batchSize: 2, fast: true, topic: body.topic });
+          const removedClaims = [...offTopic, ...audit.removed];
+          diagnostics.removed = removedClaims.slice(0, 40);
+          diagnostics.stages.push(snapshotDraft(d, "Source verification"));
+          ensureEssayEnds(d, body.topic);
+          const removed = removedClaims.length > 0
+            ? ` The review removed these off-topic or unsupported claims; replace them only with relevant claims directly supported by the supplied page text:\n${removedClaims.slice(0, 8).join("\n")}`
             : "";
           if (body.wordTarget >= 400) {
             consolidateSectionParagraphs(d);
           }
           groupCitationRuns(d);
+          assertUncitedConclusion(d);
+          const counts = citationCounts(d);
+          if (counts.footnotes < body.minimumFootnotes || counts.works < body.minimumSources) {
+            await repairCitationMinimums(d, body, writingSources, signal);
+          }
+          diagnostics.stages.push(snapshotDraft(d, "Citation check"));
           assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
+          if (body.wordTarget >= 400) {
+            // This optional pass extends only depleted sections with fresh,
+            // independently checked findings. A provider outage must not
+            // discard an otherwise valid source-verified essay.
+            try {
+              const expanded = structuredClone(d);
+              const before = countWords(d);
+              const improved = await repairParagraphDepth(expanded, body, writingSources, signal);
+              if (improved) Object.assign(d, expanded);
+              diagnostics.depthRepair = {attempted: true, addedWords: Math.max(0, countWords(d) - before)};
+            }
+            catch (error) {
+              signal.throwIfAborted();
+              diagnostics.depthRepair = {attempted: true, addedWords: 0,
+                reason: error instanceof Error ? error.message : "The optional expansion did not complete."};
+            }
+          }
+          diagnostics.stages.push(snapshotDraft(d, "Final"));
+          d.diagnostics = structuredClone(diagnostics);
           const bodyEnd = d.introduction.length + d.sections.flatMap((section) => section.paragraphs).length;
           const bodyClaims = new Set(d.evidence.filter((item) => item.paragraph >= d.introduction.length && item.paragraph < bodyEnd).map((item) => item.source));
           // Analysis and explicitly proposed designs can occupy paragraphs
@@ -122,20 +165,18 @@ export async function POST(req: Request) {
             throw new Error(`Develop more factual findings from the selected passages to support the essay's analysis. The body has only ${bodyClaims.size} directly supported findings.${removed}`);
           }
           const words = countWords(d);
-          assertNoRepeatedSentences(d);
           if (Math.abs(words - body.wordTarget) > 400) {
             throw new Error(`The grounded essay is ${words} words. Revise it to stay within 400 words of the ${body.wordTarget}-word target.${removed}`);
           }
           if (body.wordTarget >= 400) {
             const sectionParagraphs = d.sections.flatMap((section) => section.paragraphs);
-            const shallow = sectionParagraphs.filter((paragraph) => {
+            const unusable = sectionParagraphs.filter((paragraph) => {
               const paragraphWords = paragraph.replace(/\[\^\d+\]/g, "").split(/\s+/).filter(Boolean).length;
-              return splitSentences(paragraph).length < 3 || paragraphWords < 60;
+              return splitSentences(paragraph).length < 2 || paragraphWords < 25;
             });
             const maxParagraphs = Math.max(4, Math.ceil(body.wordTarget / 75));
-            const incompleteEnds = [...d.introduction, ...d.conclusion].some((paragraph) => paragraph.replace(/\[\^\d+\]/g, "").split(/\s+/).filter(Boolean).length < 30);
-            if (shallow.length > 0 || sectionParagraphs.length > maxParagraphs || d.introduction.length !== 1 || d.conclusion.length !== 1 || incompleteEnds) {
-              throw new Error(`Use one introduction, one conclusion, and no more than ${maxParagraphs} developed section paragraphs. Every section paragraph needs at least 3 sentences and 60 words. Currently ${shallow.length} section paragraphs are too short.${removed}`);
+            if (unusable.length > 0 || sectionParagraphs.length > maxParagraphs || d.introduction.length !== 1 || d.conclusion.length !== 1) {
+              throw new Error(`Use one introduction, one conclusion, and no more than ${maxParagraphs} developed section paragraphs. Every section paragraph needs at least 2 sentences and 25 words. Currently ${unusable.length} section paragraphs are unusable.${removed}`);
             }
           }
         },
@@ -149,11 +190,35 @@ export async function POST(req: Request) {
         const failure = params.user.split("VALIDATION FAILURE:\n")[1]?.split("\n\nPREVIOUS RESPONSE:")[0] || "";
         const priorJson = params.user.split("\n\nPREVIOUS RESPONSE:\n")[1]?.split("\n\nReturn one complete corrected JSON object")[0];
         const previous = priorJson ? writerDraftSchema().safeParse(JSON.parse(priorJson)) : undefined;
-        return JSON.stringify(await composeSourceDraft(body, writingSources, failure, previous?.success ? previous.data : undefined));
+        signal.throwIfAborted();
+        // The inner composition already retries once with the missing-IDs
+        // feedback. If the model still omits reserved works (or source IDs /
+        // word budget), one guided recomposition usually fixes it — failing
+        // the whole draft on a single bad composition wastes every prior
+        // stage. Transport/service errors already exhausted their retries
+        // inside and are rethrown immediately.
+        let guided = failure;
+        let last: unknown = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            return JSON.stringify(await composePlannedDraft(body, writingSources, guided, previous?.success ? previous.data : undefined, signal));
+          } catch (e) {
+            last = e;
+            signal.throwIfAborted();
+            const msg = e instanceof Error ? e.message : String(e ?? "");
+            if (!/omitted reserved works|Use only source IDs|word synopsis|approximately .* words/i.test(msg)) throw e;
+            guided = `${failure}\n${msg}`.trim();
+          }
+        }
+        throw last;
       }
     );
     const issues = validateDraft(draft);
     const wordCount = countWords(draft);
+    if (body.wordTarget >= 600 && wordCount < Math.ceil(body.wordTarget * 0.85)) {
+      issues.push({code: "BELOW_TARGET_DEPTH", detail: `The verified essay is ${wordCount} words for a ${body.wordTarget}-word target. Source checks removed unsupported material; review the draft trace for depleted sections.`});
+    }
+    const worksCitedCount = citationCounts(draft).works;
     const buffer = await buildDocx(draft);
 
     let projectId = body.projectId;
@@ -179,7 +244,7 @@ export async function POST(req: Request) {
     const latest = await prisma.essayVersion.findFirst({ where: { projectId }, orderBy: { version: "desc" } });
     const version = (latest?.version ?? 0) + 1;
     const docxPath = await saveDocxFile(projectId, version, buffer);
-    const summary = `${draft.title} (${wordCount} words, ${draft.footnotes.length} footnotes, ${draft.worksCited.length} cited). Coverage: ${draft.coverage.filter((c) => c.met).length}/${draft.coverage.length} met.`;
+    const summary = `${draft.title} (${wordCount} words, ${draft.footnotes.length} footnotes, ${worksCitedCount} cited). Coverage: ${draft.coverage.filter((c) => c.met).length}/${draft.coverage.length} met.`;
 
     const record = await prisma.essayVersion.create({
       data: {
@@ -206,12 +271,13 @@ export async function POST(req: Request) {
       draft,
       wordCount,
       footnoteCount: draft.footnotes.length,
-      worksCitedCount: draft.worksCited.length,
+      worksCitedCount,
       issues,
       summary,
       downloadUrl: `/api/download/${record.id}`,
     });
   } catch (err) {
+    if (signal.aborted) return NextResponse.json({error: req.signal.aborted ? "Drafting was cancelled." : "The model service did not finish drafting and source checks within 10 minutes. Please try again when the service is responsive."}, {status: req.signal.aborted ? 499 : 504});
     const message = err instanceof Error ? err.message : "Draft failed.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
