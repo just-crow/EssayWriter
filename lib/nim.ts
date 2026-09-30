@@ -24,12 +24,6 @@ export const NIM_TIMEOUT_MS = 60_000;
 let cached: OpenAI | null = null;
 let cachedRouter: OpenAI | null = null;
 let routerKey = "";
-let routerUnavailableUntil = 0;
-
-/** Test hook: clear the OpenRouter cooldown so tests control routing. */
-export function resetProviderCooldowns(): void {
-  routerUnavailableUntil = 0;
-}
 
 export function openRouterClient(): OpenAI {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -133,7 +127,6 @@ export async function withRetry<T>(
 interface ChatParams {
   signal?: AbortSignal;
   timeoutMs?: number;
-  provider?: "nvidia";
   onProvider?: (provider: ModelProvider) => void;
   model?: string;
   system: string;
@@ -244,48 +237,28 @@ export function tagProviderError(provider: ModelProvider, err: unknown): unknown
   return tagged;
 }
 
-function describeFailure(err: unknown): string {
-  return err instanceof Error ? err.message : String(err ?? "request failed");
-}
-
-async function withProviderFallback(params: ChatParams, run: (client: OpenAI, provider: ModelProvider) => Promise<string>) {
+/**
+ * All essay text runs on paid OpenRouter Luna — no silent fallback. A Luna
+ * failure used to spill onto the throttled free NVIDIA tier mid-essay,
+ * mixing model voices and surfacing NVIDIA errors for Luna outages.
+ * Transient Luna failures retry here (honoring retry-after); anything else
+ * surfaces named so the UI can report it honestly.
+ */
+async function runOnOpenRouter(params: ChatParams, run: (client: OpenAI, provider: ModelProvider) => Promise<string>) {
   params.signal?.throwIfAborted();
-  let primaryError: unknown = null;
-  let primaryAttempts = 0;
-  if (params.provider !== "nvidia" && process.env.OPENROUTER_API_KEY && Date.now() >= routerUnavailableUntil) {
-    params.onProvider?.("openrouter");
-    try {
-      // The paid primary gets its own retries (honoring retry-after) before
-      // any fallback: a transient Luna 503 must not burn NVIDIA quota or
-      // surface as a fallback error. Non-retryable errors fall through fast.
-      return await withRetry(
-        () => { params.signal?.throwIfAborted(); return run(openRouterClient(), "openrouter"); },
-        params.tries ?? 2,
-        (n) => { primaryAttempts = Math.max(primaryAttempts, n); params.onAttempt?.(n); }
-      );
-    } catch (err) {
-      params.signal?.throwIfAborted();
-      if (params.signal?.aborted) throw err;
-      // Discard any partial output, and avoid repeatedly probing an
-      // unavailable provider during the same essay.
-      primaryError = err;
-      routerUnavailableUntil = Date.now() + 60_000;
-    }
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("Missing OPENROUTER_API_KEY. Add it to .env.local (see .env.example).");
   }
-  params.onProvider?.("nvidia");
-  try {
-    return await withRetry(() => { params.signal?.throwIfAborted(); return run(nimClient(), "nvidia"); }, params.tries ?? 3, n => params.onAttempt?.(primaryAttempts + n));
-  } catch (err) {
-    // Never swallow the primary failure: when both providers fail, the user
-    // must see both (a paid-Luna outage currently surfaces as a bare
-    // NVIDIA error, sending debugging in the wrong direction).
-    if (primaryError) throw new Error(`${describeFailure(primaryError)}; NVIDIA fallback failed: ${describeFailure(err)}`);
-    throw err;
-  }
+  params.onProvider?.("openrouter");
+  return withRetry(
+    () => { params.signal?.throwIfAborted(); return run(openRouterClient(), "openrouter"); },
+    params.tries ?? 4,
+    (n) => params.onAttempt?.(n)
+  );
 }
 
 export async function nimChat(params: ChatParams): Promise<string> {
-  return withProviderFallback(params,
+  return runOnOpenRouter(params,
     async (client, provider) => {
       try {
         const completion = await client.chat.completions.create(
@@ -306,13 +279,13 @@ export async function nimChat(params: ChatParams): Promise<string> {
 }
 
 /** Streaming variant for long generations (full essay drafts).
- * The hosted NIM gateway resets buffered connections past ~100s, so we
+ * The provider sometimes resets buffered connections past ~100s, so we
  * stream chunks and accumulate. Use this for draft and refine calls. */
 export async function nimChatLong(params: ChatParams): Promise<string> {
-  return withProviderFallback(params, async (client, provider) => {
+  return runOnOpenRouter(params, async (client, provider) => {
     // The SDK timeout only bounds stream setup. Bound the entire response as
     // well, so a provider that stops sending chunks cannot consume the whole
-    // draft route's ten-minute budget before fallback gets a turn.
+    // draft route's ten-minute budget.
     const limit = params.timeoutMs ?? 120_000;
     const deadline = AbortSignal.timeout(limit);
     const signal = params.signal ? AbortSignal.any([params.signal, deadline]) : deadline;
@@ -433,7 +406,6 @@ export async function completeJson<T extends z.ZodTypeAny>(
   let seen = 0;
   let feedback = "";
   let priorRaw = "";
-  let forceNvidia = params.provider === "nvidia";
   const responseFormat = params.responseFormat ?? zodResponseFormat(requiredOutputSchema(params.schema), "response");
   const report = (base: number) => (n: number) => {
     seen = Math.max(seen, base + n);
@@ -444,10 +416,9 @@ export async function completeJson<T extends z.ZodTypeAny>(
     try {
       raw =
         i === 0
-          ? await generate({ ...params, ...(forceNvidia ? { provider: "nvidia" as const } : {}), responseFormat, onAttempt: report(seen) })
-        : await generate({
+          ? await generate({ ...params, responseFormat, onAttempt: report(seen) })
+          : await generate({
             ...params,
-            ...(forceNvidia ? { provider: "nvidia" as const } : {}),
             responseFormat,
             user: feedback.toLowerCase().includes("malformed") || feedback.toLowerCase().includes("json")
               ? `${params.user}\n\nVALIDATION FAILURE:\n${feedback}\nThe previous output was malformed and could not be parsed as valid JSON. Return strictly valid RFC-8259 JSON matching the schema. Escape every quote inside prose strings (use \\") and ensure all brackets are properly closed.`
@@ -477,8 +448,8 @@ export async function completeJson<T extends z.ZodTypeAny>(
     } catch (e) {
       // A verifier can itself call the provider. An outage there is not
       // invalid essay content and must not restart the entire composition.
+      // Retries stay on OpenRouter Luna: no silent fallback mid-repair.
       if (e instanceof Error && e.message.startsWith("Model service error (")) throw e;
-      if ((generate === nimChat || generate === nimChatLong) && process.env.OPENROUTER_API_KEY) forceNvidia = true;
       priorRaw = value !== undefined && params.repairResponse ? params.repairResponse(value) : raw;
       last = e instanceof z.ZodError
         ? new Error(`The model returned invalid fields: ${e.issues.slice(0, 3).map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}. Try again.`)

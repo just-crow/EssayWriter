@@ -1,18 +1,17 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { z } = require('zod');
-const { nimChat, nimChatLong, completeJson, nimClient, openRouterClient, tagProviderError, resetProviderCooldowns, NIM_MODEL, OPENROUTER_MODEL } = require('../lib/nim.ts');
+const { nimChat, nimChatLong, completeJson, nimClient, openRouterClient, tagProviderError, NIM_MODEL, OPENROUTER_MODEL } = require('../lib/nim.ts');
 
-test('OpenRouter primary, transport fallback, cooldown and JSON repair', async () => {
+test('OpenRouter primary, named errors and JSON repair', async () => {
   const oldRouterKey = process.env.OPENROUTER_API_KEY;
   const oldNvidiaKey = process.env.NVIDIA_NIM_API_KEY;
   process.env.OPENROUTER_API_KEY = 'test-router-key';
   process.env.NVIDIA_NIM_API_KEY = 'test-nvidia-key';
   const router = openRouterClient().chat.completions;
   const nvidia = nimClient().chat.completions;
-  const oldRouter = router.create, oldNvidia = nvidia.create, oldNow = Date.now;
-  let now = oldNow(), routerCalls = 0, nvidiaCalls = 0;
-  Date.now = () => now;
+  const oldRouter = router.create, oldNvidia = nvidia.create;
+  let routerCalls = 0, nvidiaCalls = 0;
   const response = content => ({ choices: [{ finish_reason: 'stop', message: { content } }] });
   const params = { system: 'Return JSON.', user: 'Return an ok boolean.', tries: 1, thinking: false };
   try {
@@ -49,41 +48,40 @@ test('OpenRouter primary, transport fallback, cooldown and JSON repair', async (
     };
     assert.equal(await nimChat({ ...params, thinking: true, lowEffort: true, reasoningBudget: 256 }), '{"ok":true}');
 
+    // No silent fallback: a Luna transport failure surfaces named, with the
+    // fallback client never touched.
     const providers = [];
     router.create = async () => { routerCalls++; throw Object.assign(new Error('Rate limited'), { status: 429 }); };
-    assert.equal(await nimChat({ ...params, onProvider: p => providers.push(p) }), '{"ok":true}');
-    assert.deepEqual(providers, ['openrouter', 'nvidia']);
-    const callsBeforeCooldown = routerCalls;
-    await nimChat(params);
-    assert.equal(routerCalls, callsBeforeCooldown);
+    await assert.rejects(nimChat({ ...params, onProvider: p => providers.push(p) }), /OpenRouter Luna error \(429\): Rate limited/);
+    assert.deepEqual(providers, ['openrouter']);
+    assert.equal(nvidiaCalls, 0);
 
-    now += 61_000;
-    router.create = async () => { routerCalls++; return response('invalid JSON'); };
-    nvidia.create = async body => {
-      nvidiaCalls++;
+    // JSON repair retries on Luna itself, never switching providers.
+    let repairCalls = 0;
+    router.create = async body => {
+      routerCalls++; repairCalls++;
       assert.equal(body.response_format.type, 'json_schema');
-      return response('{"ok":true}');
+      return response(repairCalls === 1 ? 'invalid JSON' : '{"ok":true}');
     };
     const beforeRepair = routerCalls;
     assert.deepEqual(await completeJson({ ...params, schema: z.object({ ok: z.boolean() }) }), { ok: true });
-    assert.equal(routerCalls, beforeRepair + 1);
+    assert.equal(routerCalls, beforeRepair + 2);
+    assert.equal(nvidiaCalls, 0);
 
     router.create = async function* () {
       yield { choices: [{ delta: { content: 'partial garbage' } }] };
       throw new Error('stream disconnected');
     };
-    nvidia.create = async function* () {
-      yield { choices: [{ delta: { content: '{"ok":true}' }, finish_reason: 'stop' }] };
-    };
-    assert.equal(await nimChatLong(params), '{"ok":true}');
+    await assert.rejects(nimChatLong(params), /stream disconnected/);
+    assert.equal(nvidiaCalls, 0);
   } finally {
-    router.create = oldRouter; nvidia.create = oldNvidia; Date.now = oldNow;
+    router.create = oldRouter; nvidia.create = oldNvidia;
     if (oldRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = oldRouterKey;
     if (oldNvidiaKey === undefined) delete process.env.NVIDIA_NIM_API_KEY; else process.env.NVIDIA_NIM_API_KEY = oldNvidiaKey;
   }
 });
 
-test('paid primary is retried before any fallback', async () => {
+test('paid primary is retried in place', async () => {
   const oldRouterKey = process.env.OPENROUTER_API_KEY;
   const oldNvidiaKey = process.env.NVIDIA_NIM_API_KEY;
   process.env.OPENROUTER_API_KEY = 'test-router-key';
@@ -94,7 +92,6 @@ test('paid primary is retried before any fallback', async () => {
   const response = content => ({ choices: [{ finish_reason: 'stop', message: { content } }] });
   const params = { system: 'Return JSON.', user: 'hi', tries: 2, thinking: false };
   let routerCalls = 0, nvidiaCalls = 0;
-  resetProviderCooldowns();
   try {
     router.create = async () => { routerCalls++; if (routerCalls === 1) throw Object.assign(new Error('Service temporarily overloaded'), { status: 503 }); return response('{"ok":true}'); };
     nvidia.create = async () => { nvidiaCalls++; return response('{"ok":true}'); };
@@ -108,7 +105,7 @@ test('paid primary is retried before any fallback', async () => {
   }
 });
 
-test('dual provider failure names both providers', async () => {
+test('primary failure is named with no fallback involved', async () => {
   const oldRouterKey = process.env.OPENROUTER_API_KEY;
   const oldNvidiaKey = process.env.NVIDIA_NIM_API_KEY;
   process.env.OPENROUTER_API_KEY = 'test-router-key';
@@ -117,11 +114,12 @@ test('dual provider failure names both providers', async () => {
   const nvidia = nimClient().chat.completions;
   const oldRouter = router.create, oldNvidia = nvidia.create;
   const params = { system: 'Return JSON.', user: 'hi', tries: 1, thinking: false };
-  resetProviderCooldowns();
+  let nvidiaCalls = 0;
   try {
     router.create = async () => { throw Object.assign(new Error('Service temporarily overloaded'), { status: 503 }); };
-    nvidia.create = async () => { throw Object.assign(new Error('Service temporarily overloaded'), { status: 503 }); };
-    await assert.rejects(nimChat(params), /OpenRouter Luna error \(503\).*NVIDIA fallback failed: NVIDIA error \(503\)/);
+    nvidia.create = async () => { nvidiaCalls++; return { choices: [{ finish_reason: 'stop', message: { content: '{}' } }] }; };
+    await assert.rejects(nimChat(params), /OpenRouter Luna error \(503\): Service temporarily overloaded/);
+    assert.equal(nvidiaCalls, 0);
   } finally {
     router.create = oldRouter; nvidia.create = oldNvidia;
     if (oldRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = oldRouterKey;
@@ -138,13 +136,12 @@ test('rate-limit hint survives provider tagging', async () => {
   const nvidia = nimClient().chat.completions;
   const oldRouter = router.create, oldNvidia = nvidia.create;
   const params = { system: 'Return JSON.', user: 'hi', tries: 1, thinking: false };
-  resetProviderCooldowns();
   try {
     router.create = async () => { throw Object.assign(new Error('Rate limited'), { status: 429, headers: {} }); };
     nvidia.create = async () => { throw Object.assign(new Error('Rate limited'), { status: 429, headers: {} }); };
     await assert.rejects(
       completeJson({ ...params, schema: z.object({ ok: z.boolean() }) }),
-      /Rate limit reached \(OpenRouter Luna error \(429\)/
+      /Rate limit reached \(OpenRouter Luna error \(429\): Rate limited\)/
     );
   } finally {
     router.create = oldRouter; nvidia.create = oldNvidia;
@@ -162,7 +159,6 @@ test('Luna JSON calls omit sampling params for routability', async () => {
   const nvidia = nimClient().chat.completions;
   const oldRouter = router.create, oldNvidia = nvidia.create;
   const response = content => ({ choices: [{ finish_reason: 'stop', message: { content } }] });
-  resetProviderCooldowns();
   try {
     let seen;
     router.create = async body => { seen = body; return response('{"ok":true}'); };
@@ -201,7 +197,7 @@ test('bare upstream failures are tagged and retried', () => {
   assert.equal(tagProviderError('openrouter', wrapped), wrapped);
 });
 
-test('cancellation stops before any provider request or fallback', async () => {
+test('cancellation stops before any provider request', async () => {
   const controller=new AbortController();
   controller.abort(new Error('Draft cancelled'));
   await assert.rejects(nimChat({system:'Test',user:'Test',signal:controller.signal}),/Draft cancelled/);

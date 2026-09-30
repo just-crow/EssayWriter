@@ -7,9 +7,10 @@ Copy `.env.example` to `.env.local` and fill in `NVIDIA_NIM_API_KEY`,
 (find the last two under Supabase dashboard → Project Settings → Data API).
 
 Set `OPENROUTER_API_KEY` in `.env.local` to use
-`openai/gpt-6-luna` as the primary text model. This OpenRouter model is billed
-per token. Requests fall back to NVIDIA Nemotron 3 Super on provider failures.
-Without the OpenRouter key, text requests use NVIDIA directly. Keep both keys
+`openai/gpt-6-luna` as the text model. This OpenRouter model is billed
+per token, and all essay text runs on it — there is no fallback, so every
+essay reads in one consistent voice. `NVIDIA_NIM_API_KEY` is only used for
+image transcription of uploaded instruction-sheet photos. Keep both keys
 on the server, out of Git.
 
 Draft paragraphs and source-audit batches run sequentially. Transient

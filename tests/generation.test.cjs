@@ -1,7 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { z } = require("zod");
-const { parseModelJson, completeJson, nimChatLong, nimClient } = require("../lib/nim.ts");
+const { parseModelJson, completeJson, nimChatLong } = require("../lib/nim.ts");
 const { DraftSchema, writerDraftSchema } = require("../lib/essay-types.ts");
 const { prepareDraft, verifyEvidence, sourcesTextMap, expandFootnoteUses, repairEvidenceQuotes, splitSentences, validateDraft } = require("../lib/validate.ts");
 const { buildDocx } = require("../lib/docx-build.ts");
@@ -290,8 +290,10 @@ test("overload retries use increasing delays and honor provider retry-after", as
 });
 
 test("streaming honors reasoning toggle, retry options and rejects truncated output", async () => {
-  process.env.NVIDIA_NIM_API_KEY = "test-only";
-  const client = nimClient();
+  const oldRouterKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "test-only";
+  const { openRouterClient } = require("../lib/nim.ts");
+  const client = openRouterClient();
   const original = client.chat.completions.create;
   const attempts = [];
   let body;
@@ -304,17 +306,18 @@ test("streaming honors reasoning toggle, retry options and rejects truncated out
       })();
     };
     assert.equal(await nimChatLong({ system: "JSON", user: "JSON", thinking: false, tries: 1, onAttempt: (n) => attempts.push(n) }), '{"ok":true}');
-    assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false });
-    assert.equal(body.reasoning_effort, "none");
+    assert.deepEqual(body.reasoning, { effort: "none", exclude: true });
+    assert.equal(body.temperature, 0.6);
     assert.deepEqual(attempts, [1]);
     await nimChatLong({ system: "JSON", user: "JSON", thinking: true, lowEffort: true, reasoningBudget: 4096, tries: 1 });
-    assert.deepEqual(body.chat_template_kwargs, { enable_thinking: true, low_effort: true, reasoning_budget: 4096 });
-    assert.equal(body.reasoning_effort, undefined);
+    assert.deepEqual(body.reasoning, { effort: "low", exclude: true });
+    assert.equal("temperature" in body, false);
     client.chat.completions.create = async () => (async function* () {
       yield { choices: [{ delta: { content: '{"incomplete":' }, finish_reason: "length" }] };
     })();
     await assert.rejects(() => nimChatLong({ system: "JSON", user: "JSON", tries: 1 }), /output limit/);
   } finally {
     client.chat.completions.create = original;
+    if (oldRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = oldRouterKey;
   }
 });
