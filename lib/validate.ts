@@ -875,16 +875,18 @@ export function expandFootnoteUses(draft: EssayDraft): void {
 
 /**
  * Rebuild Works Cited deterministically from the footnote entries:
- * dedupe by URL, format one MLA-ish line per source, sort alphabetically.
- * The model sometimes returns empty strings here; deriving from footnotes
- * (which are verified present) guarantees a non-empty, consistent list.
+ * dedupe by normalized URL, format one MLA-ish line per source, sort
+ * alphabetically. The model sometimes returns empty strings here; deriving
+ * from footnotes (which are verified present) guarantees a non-empty,
+ * consistent list. Normalized matching collapses trailing-slash, tracking
+ * param, and case variants of the same page into one entry.
  * Mutates the draft.
  */
 export function rebuildWorksCited(draft: EssayDraft): void {
   const seen = new Set<string>();
   const entries: string[] = [];
   for (const f of draft.footnotes) {
-    const key = (f.url || "").trim().toLowerCase() || `${f.author}|${f.title}`;
+    const key = normalizeUrl(f.url || "") || `${(f.author || "").toLowerCase()}|${(f.title || "").toLowerCase()}`;
     if (!key || seen.has(key)) continue;
     seen.add(key);
     const head = f.author

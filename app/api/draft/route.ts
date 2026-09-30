@@ -19,7 +19,7 @@ import { buildWritingPlan, composePlannedDraft } from "@/lib/planned-writer";
 import { structuralSectionRole } from "@/lib/paragraph-plan";
 import { removeOffTopicProse } from "@/lib/topic-relevance";
 import { groupCitationRuns } from "@/lib/citation-runs";
-import { buildCoverage } from "@/lib/validate";
+import { buildCoverage, rebuildWorksCited } from "@/lib/validate";
 import { assertCitationMinimums, assertUncitedConclusion, citationCounts } from "@/lib/citation-limits";
 import { workIdentity } from "@/lib/work-identity";
 import { repairCitationMinimums } from "@/lib/citation-repair";
@@ -234,6 +234,9 @@ export async function POST(req: Request) {
         throw last;
       }
     );
+    // Repairs append footnotes after the audit's bibliography rebuild, so
+    // rebuild here or the persisted list misses the repaired citations.
+    rebuildWorksCited(draft);
     const issues = validateDraft(draft);
     const wordCount = countWords(draft);
     // Agent-style coverage report: every outline requirement located in the

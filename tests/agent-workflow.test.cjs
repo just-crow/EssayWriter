@@ -61,6 +61,22 @@ test('writer-stage voice removes banned punctuation', () => {
   );
 });
 
+test('works cited collapses URL variants into one entry', () => {
+  const { rebuildWorksCited } = require('../lib/validate.ts');
+  const draft = {
+    title: 't', introduction: ['a[^1][^2][^3]'], sections: [], conclusion: ['c'],
+    footnotes: [
+      { id: 1, author: '', title: 'Rice Study', publisher: 'example.edu', year: '2024', url: 'https://example.edu/rice', accessed: '30 Sept 2026' },
+      { id: 2, author: '', title: 'Rice Study', publisher: 'example.edu', year: '2024', url: 'https://example.edu/rice/', accessed: '30 Sept 2026' },
+      { id: 3, author: '', title: 'Rice Study', publisher: 'example.edu', year: '2024', url: 'https://WWW.example.edu/rice?utm_source=x', accessed: '30 Sept 2026' },
+    ],
+    evidence: [], coverage: [],
+  };
+  rebuildWorksCited(draft);
+  assert.equal(draft.worksCited.length, 1);
+  assert.match(draft.worksCited[0], /Rice Study/);
+});
+
 test('coverage matches rhetorical moves by signal phrases', () => {
   const { buildCoverage } = require('../lib/validate.ts');
   const draft = {
