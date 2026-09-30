@@ -153,6 +153,36 @@ test('rate-limit hint survives provider tagging', async () => {
   }
 });
 
+test('Luna JSON calls omit sampling params for routability', async () => {
+  const oldRouterKey = process.env.OPENROUTER_API_KEY;
+  const oldNvidiaKey = process.env.NVIDIA_NIM_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-router-key';
+  process.env.NVIDIA_NIM_API_KEY = 'test-nvidia-key';
+  const router = openRouterClient().chat.completions;
+  const nvidia = nimClient().chat.completions;
+  const oldRouter = router.create, oldNvidia = nvidia.create;
+  const response = content => ({ choices: [{ finish_reason: 'stop', message: { content } }] });
+  resetProviderCooldowns();
+  try {
+    let seen;
+    router.create = async body => { seen = body; return response('{"ok":true}'); };
+    // thinking:false + JSON schema: temperature/top_p would 404 routing.
+    await nimChat({ system: 's', user: 'u', thinking: false, responseFormat: { type: 'json_schema', json_schema: { name: 't', strict: true, schema: { type: 'object' } } } });
+    assert.equal('temperature' in seen, false);
+    assert.equal('top_p' in seen, false);
+    assert.deepEqual(seen.provider, { require_parameters: true });
+    // Plain-text Luna calls keep sampling params (routable, verified live).
+    await nimChat({ system: 's', user: 'u', thinking: false, temperature: 0.5 });
+    assert.equal(seen.temperature, 0.5);
+    assert.equal(seen.top_p, 0.95);
+    assert.equal('provider' in seen, false);
+  } finally {
+    router.create = oldRouter; nvidia.create = oldNvidia;
+    if (oldRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = oldRouterKey;
+    if (oldNvidiaKey === undefined) delete process.env.NVIDIA_NIM_API_KEY; else process.env.NVIDIA_NIM_API_KEY = oldNvidiaKey;
+  }
+});
+
 test('provider tagging leaves logic errors untouched', () => {
   const plain = new Error('Model returned an empty response.');
   assert.equal(tagProviderError('openrouter', plain), plain);

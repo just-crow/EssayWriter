@@ -184,8 +184,11 @@ function requestBody(params: ChatParams, extra?: { stream?: boolean }, provider:
       : params.model?.startsWith("nvidia/") && !params.model.endsWith(":free") ? params.model : NIM_MODEL,
     messages,
     // GPT-6 reasoning requests reject custom sampling values. They remain
-    // available for the NVIDIA fallback and for Luna with reasoning off.
-    ...(!luna || params.thinking === false ? { temperature: params.temperature ?? 0.6, top_p: 0.95 } : {}),
+    // available for the NVIDIA fallback and for Luna plain-text calls.
+    // Luna + response_format must also omit them: OpenRouter finds no
+    // endpoint for temperature/top_p under require_parameters (verified
+    // live: every thinking:false JSON call 404s with them, 200s without).
+    ...(!luna || (params.thinking === false && !params.responseFormat) ? { temperature: params.temperature ?? 0.6, top_p: 0.95 } : {}),
     max_tokens: params.maxTokens ?? 6000,
     ...(params.responseFormat ? { response_format: params.responseFormat } : {}),
     // Luna's JSON-object mode works, but its provider is excluded by
