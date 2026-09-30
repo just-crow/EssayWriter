@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { EssayDraft } from "./essay-types";
-import { completeJson, nimChatLong } from "./nim";
+import { completeJson, nimChatLong, type ModelProvider } from "./nim";
 import { citationScopes, groupCitationRuns } from "./citation-runs";
 import { normalizeUrl } from "./search";
 import { sourcePassages, relevantSourcePassages } from "./source-passages";
@@ -64,7 +64,7 @@ export async function auditAndAlignGrounding(
     container?: string;
     kind?: string;
   }>,
-  options: { signal?: AbortSignal; batchSize?: number; fast?: boolean; topic?: string } = {}
+  options: { signal?: AbortSignal; batchSize?: number; fast?: boolean; topic?: string; onProvider?: (provider: ModelProvider) => void } = {}
 ): Promise<{ removed: string[] }> {
   const citationUrls = new Map(draft.footnotes.map((note) => [note.id, note.url]));
   const paragraphs = [
@@ -134,6 +134,7 @@ export async function auditAndAlignGrounding(
       temperature: 0.1,
       thinking: !options.fast,
       lowEffort: true,
+      onProvider: options.onProvider,
       reasoningBudget: 1024,
       maxTokens: Math.max(6000, expectedBatch.length * 250 + 1500),
       tries: options.fast ? 2 : 4,

@@ -1,7 +1,7 @@
 import type { EssayDraft, SourceItem } from "./essay-types";
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { completeJson, nimChatLong } from "./nim";
+import { completeJson, nimChatLong, type ModelProvider } from "./nim";
 import { planParagraphs, sourceFindingSentences } from "./paragraph-plan";
 import { cleanEssayVoice } from "./source-writer";
 import { normQuote, consolidateSectionParagraphs } from "./validate";
@@ -38,7 +38,8 @@ async function composeInChunks(
   input: WritingInput,
   plan: ReturnType<typeof buildWritingPlan>,
   feedback: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProvider?: (provider: ModelProvider) => void
 ): Promise<{ title: string; paragraphs: string[]; conclusion: string }> {
   // Small response groups stay clear of provider output caps: a rambling
   // long group aborts the whole essay, while an extra short call is cheap.
@@ -63,7 +64,7 @@ async function composeInChunks(
       responseFormat: { type: "json_object" },
       thinking: true, lowEffort: true, reasoningBudget: 128,
       temperature: 0.4, maxTokens: Math.max(2500, tasks.reduce((total, task) => total + task.words, 0) * 5 + 600),
-      timeoutMs: 90_000, tries: 1, parseTries: 3, retryTempDelta: 0, signal,
+      timeoutMs: 90_000, tries: 1, parseTries: 3, retryTempDelta: 0, signal, onProvider,
       validate: value => {
         value.paragraphs = value.paragraphs.map(normalizeCitationMarkers);
         // Citations must come from the essay's evidence plan. Prefer each
@@ -175,7 +176,7 @@ export function buildWritingPlan(input: WritingInput, sources: SourceItem[]) {
   return { ...plan, requiredSourceIds: [...new Set(plan.tasks.flatMap(task => task.assigned.map(fact => fact.sourceId)))] };
 }
 
-export async function composePlannedDraft(input: WritingInput, sources: SourceItem[], feedback = "", previous?: EssayDraft, signal?: AbortSignal): Promise<EssayDraft> {
+export async function composePlannedDraft(input: WritingInput, sources: SourceItem[], feedback = "", previous?: EssayDraft, signal?: AbortSignal, onProvider?: (provider: ModelProvider) => void): Promise<EssayDraft> {
   signal?.throwIfAborted();
   const cacheKey = createHash("sha256").update(JSON.stringify({input,sources})).digest("hex");
   for (const [key, cached] of completedDrafts) if (cached.expires < Date.now()) completedDrafts.delete(key);
@@ -192,7 +193,7 @@ export async function composePlannedDraft(input: WritingInput, sources: SourceIt
     // Longer single JSON streams tended to include planning notes and raw
     // source excerpts. Smaller groups keep the completed earlier prose in
     // view while the model develops the next part of the argument.
-    prose = await composeInChunks(input, plan, feedback, signal);
+    prose = await composeInChunks(input, plan, feedback, signal, onProvider);
   } else try {
     prose = await completeJson({
     system: `Write a complete source-based academic essay from the supplied evidence plan. ${SOURCE_BASED_ARGUMENT_GUIDANCE} Plan the whole argument before writing. Each new paragraph must build on the paragraphs already written without repeating their findings or wording. Each paragraph may use only the findings and source IDs in its own assigned array; save findings assigned to later paragraphs for those paragraphs. Every body paragraph must answer its assigned section point, not summarize the entire essay. Reserve essay-wide synthesis and conclusionBrief solely for the separate conclusion field. The introduction frames the question and thesis briefly; develop detailed examples in the body. Use supplied findings for specialised, research-dependent facts. Basic, widely established knowledge, personal evaluation, and reasoning warranted by established evidence may be uncited. Do not present a new specialised finding or mechanism as common knowledge or inference. Preserve all qualifiers. Paraphrase rather than copy. Answer each section's actual question with a clear subject, concrete evidence and qualified evaluation. Do not replace a section's requested analysis with background from another section. Distinguish potential applications from demonstrated results. Do not invent examples, technical details, mechanisms, costs, policies, study limitations or outcomes. Never reuse an example, variety, statistic, or finding already developed in another paragraph; each paragraph develops different assigned findings. In evaluative or ethical discussion, pair every stated concern with the relevant evidence, limitation, or qualifier from the assigned findings; do not list concerns the findings do not establish. If excerpts do not establish an impact, say only that these excerpts do not establish it; never assert that the underlying research or real world lacks evidence. Do not refer to assigned findings, source figures, the task or the publication's purpose. No grandiose introduction, raw asterisks, em dashes or semicolons. Cite each run of source-dependent facts while composing with [^sourceId], using only that run's supplied source. When a paragraph uses two sources, close the first source's factual run with its footnote before beginning the second; one marker at the end cannot support earlier claims drawn from another work. Do not add decorative citations to common knowledge or personal reasoning. A closing footnote covers previous sentences back to the preceding footnote or paragraph boundary. Meet at least minimumSources distinct works and minimumFootnotes notes using their assigned findings. The requiredSourceIds list identifies available planned evidence, not a requirement to cite every gathered work. More notes and works are allowed. Never put decorative citations on unsupported statements. Write one introduction, all planned sections, then one conclusion. The conclusion contains no citations and only synthesizes established body points, with no new information. Return raw JSON with title, paragraphs (an array of prose strings in plan index order, starting with the introduction), and conclusion (one prose string). The server inserts the section headings.`,
@@ -205,7 +206,7 @@ export async function composePlannedDraft(input: WritingInput, sources: SourceIt
     schema,
     thinking: true, lowEffort: true, reasoningBudget: 512, temperature: 0.4, maxTokens: Math.min(30000, Math.max(8000, input.wordTarget * 8 + 2400)),
     timeoutMs: 90_000,
-    tries: 1, parseTries: 2, retryTempDelta: 0, signal,
+    tries: 1, parseTries: 2, retryTempDelta: 0, signal, onProvider,
     validate: prose => {
       prose.paragraphs = prose.paragraphs.map(normalizeCitationMarkers);
       prose.conclusion = normalizeCitationMarkers(prose.conclusion);
@@ -227,7 +228,7 @@ export async function composePlannedDraft(input: WritingInput, sources: SourceIt
   } catch (error) {
     signal?.throwIfAborted();
     if (!isTransportFailure(error)) throw error;
-    prose = await composeInChunks(input, plan, feedback, signal);
+    prose = await composeInChunks(input, plan, feedback, signal, onProvider);
   }
   prose.paragraphs = prose.paragraphs.map(normalizeCitationMarkers);
   prose.conclusion = normalizeCitationMarkers(prose.conclusion).replace(/\[\^[^\]]+\]/g, "");

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { EssayDraft, SourceItem } from "./essay-types";
-import { completeJson, nimChatLong } from "./nim";
+import { completeJson, nimChatLong, type ModelProvider } from "./nim";
 import { buildWritingPlan, type WritingInput } from "./planned-writer";
 import { auditAndAlignGrounding } from "./grounding-audit";
 import { citationCounts } from "./citation-limits";
@@ -13,7 +13,7 @@ import { cleanEssayVoice } from "./source-writer";
 
 /** Repair audit losses without regenerating or re-auditing established prose.
  * Additions earn their citations through the same independent source audit. */
-export async function repairCitationMinimums(draft: EssayDraft, input: WritingInput, sources: SourceItem[], signal?: AbortSignal) {
+export async function repairCitationMinimums(draft: EssayDraft, input: WritingInput, sources: SourceItem[], signal?: AbortSignal, onProvider?: (provider: ModelProvider) => void) {
   const plan = buildWritingPlan(input, sources);
   const tokens = (text: string) => new Set((text.toLowerCase().match(/[a-z]{4,}/g) || []).map(word => word.replace(/s$/, "")));
   const candidates = sources.flatMap(source => sourceFindingSentences(source.content).flatMap(text =>
@@ -58,7 +58,7 @@ export async function repairCitationMinimums(draft: EssayDraft, input: WritingIn
         verifiedEssay: draft, slots: slots.map(slot => ({...slot, heading: draft.sections[slot.section]?.heading})), wordsPerAddition: wordsPerSlot}),
       schema: z.object({additions: z.array(z.string().min(20)).length(slots.length)}),
       temperature: 0.4, maxTokens: Math.max(1000, slots.length * wordsPerSlot * 5),
-      thinking: false, tries: 3, parseTries: 2, timeoutMs: 45_000, signal,
+      thinking: false, tries: 3, parseTries: 2, timeoutMs: 45_000, signal, onProvider,
       validate: response => response.additions.forEach((text, index) => {
         const ids = [...text.matchAll(/\[\^(\d+)\]/g)].map(match => Number(match[1]));
         if (!ids.length || ids.some(id => id !== slots[index].sourceId)) throw new Error("Each addition must cite only its assigned source ID.");

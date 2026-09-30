@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { EssayDraft, SourceItem } from "./essay-types";
 import type { WritingInput } from "./planned-writer";
-import { completeJson, nimChatLong } from "./nim";
+import { completeJson, nimChatLong, type ModelProvider } from "./nim";
 import { auditAndAlignGrounding } from "./grounding-audit";
 import { countWords } from "./docx-build";
 import { normQuote } from "./validate";
@@ -15,7 +15,7 @@ const wordCount = (value: string) => value.replace(/\[\^\d+\]/g, "").split(/\s+/
 
 /** Develop thin, already verified sections from unused observed findings.
  * A failed optional expansion leaves the existing essay intact. */
-export async function repairParagraphDepth(draft: EssayDraft, input: WritingInput, sources: SourceItem[], signal?: AbortSignal): Promise<boolean> {
+export async function repairParagraphDepth(draft: EssayDraft, input: WritingInput, sources: SourceItem[], signal?: AbortSignal, onProvider?: (provider: ModelProvider) => void): Promise<boolean> {
   const goal = Math.min(input.wordTarget, Math.max(input.wordTarget - 150, Math.ceil(input.wordTarget * 0.85)));
   const initialWords = countWords(draft);
   const sectionWords = draft.sections.map(section => section.paragraphs.reduce((sum, paragraph) => sum + wordCount(paragraph), 0));
@@ -67,7 +67,7 @@ export async function repairParagraphDepth(draft: EssayDraft, input: WritingInpu
       slots: useSlots.map(slot => ({...slot, heading: draft.sections[slot.section].heading})), wordsPerAddition: perAddition}),
     schema: z.object({additions: z.array(z.string().min(25)).length(useSlots.length)}),
     temperature: 0.3, maxTokens: Math.max(2400, useSlots.length * perAddition * 7),
-    thinking: false, tries: 2, parseTries: 2, timeoutMs: 45_000, signal,
+    thinking: false, tries: 2, parseTries: 2, timeoutMs: 45_000, signal, onProvider,
     validate: value => value.additions.forEach((text, index) => {
       const ids = [...text.matchAll(/\[\^(\d+)\]/g)].map(match => Number(match[1]));
       if (!ids.length || ids.some(id => id !== useSlots[index].sourceId)) throw new Error(`Use only [^${useSlots[index].sourceId}] in addition ${index + 1}.`);

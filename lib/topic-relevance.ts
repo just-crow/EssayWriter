@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { EssayDraft } from "./essay-types";
-import { completeJson, nimChatLong } from "./nim";
+import { completeJson, nimChatLong, type ModelProvider } from "./nim";
 import { citationScopes } from "./citation-runs";
 import { splitSentences } from "./validate";
 
@@ -12,7 +12,7 @@ const RelevanceSchema = z.object({decisions: z.array(z.object({
 /** A focused topic check before source verification. A page can faithfully
  * support a sentence about the wrong subject; factual grounding alone cannot
  * decide whether that sentence belongs in this particular essay. */
-export async function removeOffTopicProse(draft: EssayDraft, topic: string, signal?: AbortSignal, structureJson?: string): Promise<string[]> {
+export async function removeOffTopicProse(draft: EssayDraft, topic: string, signal?: AbortSignal, structureJson?: string, onProvider?: (provider: ModelProvider) => void): Promise<string[]> {
   let sectionPurposes: Array<{heading: string; points: string[]}> = [];
   try {
     const outline = JSON.parse(structureJson || "{}");
@@ -42,7 +42,7 @@ export async function removeOffTopicProse(draft: EssayDraft, topic: string, sign
         user: `ESSAY TOPIC: ${topic}\nASSIGNED SECTION PURPOSES: ${JSON.stringify(sectionPurposes)}\nSENTENCES TO CHECK: ${JSON.stringify(batch)}\nReturn {"decisions":[{"paragraph":number,"sentenceIndex":number,"relevant":true,"reason":"brief"}]} with EXACTLY one entry for every supplied sentence.`,
         schema: RelevanceSchema, responseFormat: {type: "json_object"},
         temperature: 0, thinking: false, maxTokens: 1800,
-        timeoutMs: 45_000, tries: 2, parseTries: 2, signal,
+        timeoutMs: 45_000, tries: 2, parseTries: 2, signal, onProvider,
         validate: value => {
           const expected = batch.flatMap(item => item.sentences.map(sentence => `${item.paragraph}:${sentence.sentenceIndex}`));
           const returned = value.decisions.map(claim => `${claim.paragraph}:${claim.sentenceIndex}`);

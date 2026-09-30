@@ -114,6 +114,11 @@ export async function POST(req: Request) {
     // plus the freshly fetched ones.
     const dbSources = await prisma.source.findMany({ where: { projectId: body.projectId } });
     const sourcesText = sourcesTextMap([...dbSources, ...newSources]);
+    // Provider provenance, same as the draft route.
+    const usedProviders: Array<"openrouter" | "nvidia"> = [];
+    const noteProvider = (provider: "openrouter" | "nvidia") => {
+      if (!usedProviders.includes(provider)) usedProviders.push(provider);
+    };
     const trunc = (content: string) => content.length > 12000 ? content.slice(0, 12000) + "\n[truncated]" : content;
     const writerDbSources = dbSources
       .filter((s) => body.minimumSources > citedUrls.size || citedUrls.has(normalizeUrl(s.url)))
@@ -125,6 +130,7 @@ export async function POST(req: Request) {
         system: REFINE_SYSTEM,
         user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\nMinimum footnotes: ${body.minimumFootnotes}\nMinimum distinct cited works: ${body.minimumSources}\nDevelop factual findings from at least this many different source URLs before writing. Cite at least the requested number of separate factual sentences; These are minimums, not exact counts or caps: you may use more footnotes and more distinct works when they support the essay. Do not add decorative citations.\n\nCurrent essay JSON:\n${baseEssayForWriter}\n\nExisting source texts:\n${JSON.stringify(writerDbSources)}\n\nUser revision instruction:\n${body.instruction}\n\n${sourceBlock.replace(JSON.stringify(newSources), JSON.stringify(writerNewSources))}\n\nReturn the revised essay JSON now.`,
         temperature: 0.7,
+        onProvider: noteProvider,
         maxTokens: Math.min(32768, Math.max(12000, project.wordTarget * 3 + 6000)),
         schema: WriterDraftSchema,
         responseFormat: { type: "json_object" },
@@ -134,7 +140,7 @@ export async function POST(req: Request) {
         validate: async (d) => {
           prepareDraft(d, sourcesText, { deferEvidence: true });
           assertUncitedConclusion(d);
-          const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources]);
+          const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources], { onProvider: noteProvider });
           assertUncitedConclusion(d);
           assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
           const bodyEnd = d.introduction.length + d.sections.flatMap((section) => section.paragraphs).length;
@@ -163,6 +169,9 @@ export async function POST(req: Request) {
       nimChatLong
     );
     const issues = validateDraft(draft);
+    // Minimal diagnostics so the UI can report which providers served this
+    // revision (full stage history is a draft-route feature).
+    draft.diagnostics = { plan: [], stages: [], removed: [], providers: [...usedProviders] };
     const wordCount = countWords(draft);
     const buffer = await buildDocx(draft);
 

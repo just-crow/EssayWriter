@@ -456,9 +456,17 @@ export default function PipelinePanel(props: PipelinePanelProps) {
           </div>
         ) : null}
 
-        {diagnostics ? (
+        {diagnostics && (diagnostics.stages.length > 0 || (diagnostics.providers?.length ?? 0) > 0) ? (
           <details className="mt-4 rounded-lg border border-stone-200 p-3 text-sm dark:border-stone-700">
             <summary className="cursor-pointer font-semibold text-stone-800 dark:text-stone-200">{t("draftTraceHeading")}</summary>
+            {(diagnostics.providers?.length ?? 0) > 0 ? (
+              <p className="mt-2 text-xs text-stone-700 dark:text-stone-300">
+                <span className="font-semibold">{t("providersLabel")}: </span>
+                {diagnostics.providers!.map((p) =>
+                  p === "openrouter" ? "OpenRouter Luna" : "NVIDIA Nemotron"
+                ).join(" + ")}
+              </p>
+            ) : null}
             <p className="mt-2 text-xs text-stone-600 dark:text-stone-400">{t("draftTraceHint")}</p>
             <ul className="mt-3 space-y-2 text-xs text-stone-700 dark:text-stone-300">
               {diagnostics.stages.map((stage, index) => (

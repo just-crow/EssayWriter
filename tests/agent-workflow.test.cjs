@@ -119,6 +119,28 @@ test('writer-stage voice repairs bare should-clauses', () => {
   );
 });
 
+test('pipeline stages report which providers served them', async () => {
+  const nim = require('../lib/nim.ts');
+  const { removeOffTopicProse } = require('../lib/topic-relevance.ts');
+  const { DraftDiagnosticsSchema } = require('../lib/draft-diagnostics.ts');
+  const original = nim.nimChatLong;
+  const seen = [];
+  nim.nimChatLong = async params => {
+    params.onProvider?.('openrouter');
+    return JSON.stringify({ decisions: [{ paragraph: 0, sentenceIndex: 0, relevant: true, reason: 'on point' }] });
+  };
+  try {
+    const draft = {
+      title: 't', introduction: ['Rivers shape valleys.'], sections: [],
+      conclusion: ['c'], footnotes: [], worksCited: [], evidence: [], coverage: [],
+    };
+    await removeOffTopicProse(draft, 'Rivers', undefined, '{}', p => seen.push(p));
+    assert.deepEqual(seen, ['openrouter']);
+    const diagnostics = DraftDiagnosticsSchema.parse({ plan: [], stages: [], removed: [], providers: seen });
+    assert.deepEqual(diagnostics.providers, ['openrouter']);
+  } finally { nim.nimChatLong = original; }
+});
+
 test('standalone author-date debris is removed, inline attribution kept', () => {
   const { isCitationDebris } = require('../lib/source-writer.ts');
   assert.equal(isCitationDebris('Mogo et al., 2019).[^4]'), true);

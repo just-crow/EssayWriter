@@ -70,6 +70,12 @@ export async function POST(req: Request) {
     const plan = buildWritingPlan(body, writingSources);
     const findings = JSON.stringify(plan);
     const diagnostics: DraftDiagnostics = {plan: plannedEvidence(plan.tasks, plan.headings), stages: [], removed: []};
+    // Provider provenance for the UI: which models actually served this
+    // essay (paid Luna vs fallback), in first-use order.
+    const usedProviders: Array<"openrouter" | "nvidia"> = [];
+    const noteProvider = (provider: "openrouter" | "nvidia") => {
+      if (!usedProviders.includes(provider)) usedProviders.push(provider);
+    };
     if (new Set(writingSources.map((source) => normalizeUrl(source.url))).size < body.minimumSources) return NextResponse.json({ error: `The selected pages did not provide factual findings from ${body.minimumSources} distinct works. Gather stronger sources or lower the minimum cited works.` }, { status: 400 });
     // The model starves when the source dump fills its context (18 x 100k).
     // Planning already selected findings; the writer only needs enough page
@@ -132,13 +138,13 @@ export async function POST(req: Request) {
           // topicality independently (off-topic claims fail verification).
           let offTopic: string[] = [];
           try {
-            offTopic = await removeOffTopicProse(d, body.topic, signal, body.structureJson);
+            offTopic = await removeOffTopicProse(d, body.topic, signal, body.structureJson, noteProvider);
           } catch (error) {
             signal.throwIfAborted();
             diagnostics.topicReviewSkipped = error instanceof Error ? error.message : "Topic review unavailable.";
           }
           diagnostics.stages.push(snapshotDraft(d, "Topic review"));
-          const audit = await auditAndAlignGrounding(d, sourceItems, { signal, batchSize: 2, fast: true, topic: body.topic });
+          const audit = await auditAndAlignGrounding(d, sourceItems, { signal, batchSize: 2, fast: true, topic: body.topic, onProvider: noteProvider });
           const removedClaims = [...offTopic, ...audit.removed];
           diagnostics.removed = removedClaims.slice(0, 40);
           diagnostics.stages.push(snapshotDraft(d, "Source verification"));
@@ -153,7 +159,7 @@ export async function POST(req: Request) {
           assertUncitedConclusion(d);
           const counts = citationCounts(d);
           if (counts.footnotes < body.minimumFootnotes || counts.works < body.minimumSources) {
-            await repairCitationMinimums(d, body, writingSources, signal);
+            await repairCitationMinimums(d, body, writingSources, signal, noteProvider);
           }
           diagnostics.stages.push(snapshotDraft(d, "Citation check"));
           assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
@@ -164,7 +170,7 @@ export async function POST(req: Request) {
             try {
               const expanded = structuredClone(d);
               const before = countWords(d);
-              const improved = await repairParagraphDepth(expanded, body, writingSources, signal);
+              const improved = await repairParagraphDepth(expanded, body, writingSources, signal, noteProvider);
               if (improved) Object.assign(d, expanded);
               diagnostics.depthRepair = {attempted: true, addedWords: Math.max(0, countWords(d) - before)};
             }
@@ -175,6 +181,7 @@ export async function POST(req: Request) {
             }
           }
           diagnostics.stages.push(snapshotDraft(d, "Final"));
+          diagnostics.providers = [...usedProviders];
           d.diagnostics = structuredClone(diagnostics);
           const bodyEnd = d.introduction.length + d.sections.flatMap((section) => section.paragraphs).length;
           const bodyClaims = new Set(d.evidence.filter((item) => item.paragraph >= d.introduction.length && item.paragraph < bodyEnd).map((item) => item.source));
@@ -231,7 +238,7 @@ export async function POST(req: Request) {
         let last: unknown = null;
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
-            return JSON.stringify(await composePlannedDraft(body, writingSources, guided, previous?.success ? previous.data : undefined, signal));
+            return JSON.stringify(await composePlannedDraft(body, writingSources, guided, previous?.success ? previous.data : undefined, signal, noteProvider));
           } catch (e) {
             last = e;
             signal.throwIfAborted();

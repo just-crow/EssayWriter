@@ -132,6 +132,7 @@ export const translations = {
     draftTraceWorks: "works",
     draftTraceRepair: "Verified expansion",
     draftTraceRemoved: "Removed claims and reasons",
+    providersLabel: "Models used",
 
     // Preview
     previewHeading: "Essay preview",
@@ -315,6 +316,7 @@ export const translations = {
     draftTraceWorks: "izvora",
     draftTraceRepair: "Provjereno proširenje",
     draftTraceRemoved: "Uklonjene tvrdnje i razlozi",
+    providersLabel: "Korišteni modeli",
 
     // Preview
     previewHeading: "Pregled eseja",

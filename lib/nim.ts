@@ -11,6 +11,10 @@ export const NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
 export const OPENROUTER_MODEL = "openai/gpt-6-luna";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
+/** Which model provider served a request. Surfaced in draft diagnostics so
+ * readers can tell OpenRouter Luna output from NVIDIA fallback output. */
+export type ModelProvider = "openrouter" | "nvidia";
+
 /** Upper bound for one model attempt. The hosted endpoint sometimes stalls
  * (accepts the request but sends nothing for minutes); without this the
  * call hangs until the SDK default timeout, looking dead to the user.
@@ -130,7 +134,7 @@ interface ChatParams {
   signal?: AbortSignal;
   timeoutMs?: number;
   provider?: "nvidia";
-  onProvider?: (provider: "openrouter" | "nvidia") => void;
+  onProvider?: (provider: ModelProvider) => void;
   model?: string;
   system: string;
   user: string;
@@ -229,7 +233,7 @@ function requestBody(params: ChatParams, extra?: { stream?: boolean }, provider:
  * Includes already-wrapped errors so a message is never tagged twice. */
 const LOGIC_ERRORS = /output limit|empty (response|stream)|stream terminated|did not finish|was cancelled|cancelled|aborted|no usable|empty essay|empty outline|duplicate footnote|no footnote|invalid fields|malformed data|unusable data|model service error|rate limit reached/i;
 
-export function tagProviderError(provider: "nvidia" | "openrouter", err: unknown): unknown {
+export function tagProviderError(provider: ModelProvider, err: unknown): unknown {
   const msg = err instanceof Error ? err.message : String(err ?? "request failed");
   if (LOGIC_ERRORS.test(msg)) return err;
   const status = getStatus(err);
@@ -244,7 +248,7 @@ function describeFailure(err: unknown): string {
   return err instanceof Error ? err.message : String(err ?? "request failed");
 }
 
-async function withProviderFallback(params: ChatParams, run: (client: OpenAI, provider: "nvidia" | "openrouter") => Promise<string>) {
+async function withProviderFallback(params: ChatParams, run: (client: OpenAI, provider: ModelProvider) => Promise<string>) {
   params.signal?.throwIfAborted();
   let primaryError: unknown = null;
   let primaryAttempts = 0;

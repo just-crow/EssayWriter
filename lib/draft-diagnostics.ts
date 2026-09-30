@@ -9,6 +9,8 @@ export const DraftDiagnosticsSchema = z.object({
   removed: z.array(z.string()),
   depthRepair: z.object({attempted: z.boolean(), addedWords: z.number().int().min(0), reason: z.string().optional()}).optional(),
   topicReviewSkipped: z.string().optional(),
+  /** Which model providers served this essay, in first-use order. */
+  providers: z.array(z.enum(["openrouter", "nvidia"])).optional(),
 });
 export type DraftDiagnostics = z.infer<typeof DraftDiagnosticsSchema>;
 
