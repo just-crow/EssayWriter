@@ -26,11 +26,11 @@ export async function repairParagraphDepth(draft: EssayDraft, input: WritingInpu
   const candidates = sources.flatMap(source => sourceFindingSentences(source.content).map(text => ({
     sourceId: Number(source.id), text, quality: sourceQualityFactor(source), tokens: terms(text), key: normQuote(text),
   }))).filter(fact => fact.text.split(/\s+/).length >= 9 && !usedQuotes.has(fact.key) && !usedProse.includes(fact.key));
-  const slots: Array<{section: number; sourceId: number; text: string}> = [];
+  const allSlots: Array<{section: number; sourceId: number; text: string}> = [];
   const used = new Set<string>();
   const plannedWords = draft.sections.map(() => 0);
   const slotGoal = Math.min(6, Math.max(draft.sections.length, Math.ceil(Math.max(0, goal - initialWords) / 65)));
-  while (slots.length < slotGoal) {
+  while (allSlots.length < slotGoal) {
     const rankedSections = draft.sections.map((_, index) => index)
       .sort((a, b) => sectionWords[a] + plannedWords[a] - sectionWords[b] - plannedWords[b]);
     let selected = false;
@@ -44,7 +44,7 @@ export async function repairParagraphDepth(draft: EssayDraft, input: WritingInpu
       return {fact, score: (overlap * 3 + Math.min(novelty, 8) * 0.25) * fact.quality};
     }).filter(item => item.score >= 3).sort((a, b) => b.score - a.score);
     if (!ranked.length) continue;
-    slots.push({section: index, sourceId: ranked[0].fact.sourceId, text: ranked[0].fact.text});
+    allSlots.push({section: index, sourceId: ranked[0].fact.sourceId, text: ranked[0].fact.text});
     used.add(ranked[0].fact.key);
     plannedWords[index] += 65;
     selected = true;
@@ -52,23 +52,39 @@ export async function repairParagraphDepth(draft: EssayDraft, input: WritingInpu
     }
     if (!selected) break;
   }
-  if (!slots.length) return false;
+  if (!allSlots.length) return false;
 
-  const wordsPerAddition = Math.max(30, Math.min(75, Math.ceil((goal - initialWords) / slots.length) + 8));
-  const response = await completeJson({
-    system: "Extend an existing source-verified essay. Read all previous paragraphs before writing. Return one distinct addition for each requested section. Develop only the supplied unused finding in that section, faithfully paraphrase it, and explain its significance without repeating any existing claim, example, or wording. Cite it with the assigned [^sourceId]. Do not add unsourced facts. No headings, conclusion, raw Markdown, or introductory filler.",
+  // A provider output cap on a large slot batch must shrink the batch,
+  // not abandon the repair: halve the slots once and retry.
+  // Models cannot hit tiny word targets reliably with a citation plus
+  // analysis inside; floor the request where short-form generation works.
+  let activeSlots = allSlots;
+  let wordsPerAddition = Math.max(55, Math.min(80, Math.ceil((goal - initialWords) / activeSlots.length) + 8));
+  const requestAdditions = (useSlots: typeof slots, perAddition: number) => completeJson({
+    system: "Extend an existing source-verified essay. Read all previous paragraphs before writing. Return one distinct addition for each requested section. Develop only the supplied unused finding in that section, faithfully paraphrase it, and explain its significance without repeating any existing claim, example, or wording. Cite it with the assigned [^sourceId]. Do not add unsourced facts. No headings, conclusion, raw Markdown, or introductory filler. Use natural academic prose with varied sentence lengths. Never use the em dash character or the semicolon character; use commas, full stops, colons, or parentheses instead. Each addition has a stated word budget: write no more than that many words, never more. Brevity is a hard constraint.",
     user: JSON.stringify({topic: input.topic, instructions: input.instructionText,
       previousEssay: {introduction: draft.introduction, sections: draft.sections, conclusion: draft.conclusion},
-      slots: slots.map(slot => ({...slot, heading: draft.sections[slot.section].heading})), wordsPerAddition}),
-    schema: z.object({additions: z.array(z.string().min(25)).length(slots.length)}),
-    temperature: 0.3, maxTokens: Math.max(2400, slots.length * wordsPerAddition * 7),
+      slots: useSlots.map(slot => ({...slot, heading: draft.sections[slot.section].heading})), wordsPerAddition: perAddition}),
+    schema: z.object({additions: z.array(z.string().min(25)).length(useSlots.length)}),
+    temperature: 0.3, maxTokens: Math.max(2400, useSlots.length * perAddition * 7),
     thinking: false, tries: 2, parseTries: 2, timeoutMs: 45_000, signal,
     validate: value => value.additions.forEach((text, index) => {
       const ids = [...text.matchAll(/\[\^(\d+)\]/g)].map(match => Number(match[1]));
-      if (!ids.length || ids.some(id => id !== slots[index].sourceId)) throw new Error(`Use only [^${slots[index].sourceId}] in addition ${index + 1}.`);
-      if (wordCount(text) > wordsPerAddition + 20) throw new Error(`Keep addition ${index + 1} near ${wordsPerAddition} words.`);
+      if (!ids.length || ids.some(id => id !== useSlots[index].sourceId)) throw new Error(`Use only [^${useSlots[index].sourceId}] in addition ${index + 1}.`);
+      if (wordCount(text) > perAddition + 40) throw new Error(`Keep addition ${index + 1} near ${perAddition} words.`);
     }),
   }, nimChatLong);
+  let response;
+  try {
+    response = await requestAdditions(activeSlots, wordsPerAddition);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err ?? "");
+    if (!/output limit/i.test(msg) || activeSlots.length < 2) throw err;
+    activeSlots = activeSlots.slice(0, Math.ceil(activeSlots.length / 2));
+    wordsPerAddition = Math.max(55, Math.min(80, Math.ceil((goal - initialWords) / activeSlots.length) + 8));
+    response = await requestAdditions(activeSlots, wordsPerAddition);
+  }
+  const slots = activeSlots;
   const supplement: EssayDraft = {title: draft.title, introduction: [], conclusion: [],
     sections: slots.map((slot, index) => ({heading: draft.sections[slot.section].heading, paragraphs: [cleanEssayVoice(response.additions[index])]})),
     footnotes: sources.map(source => ({...source, id: Number(source.id), publisher: source.publisher || source.container})),

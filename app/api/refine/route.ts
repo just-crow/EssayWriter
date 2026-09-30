@@ -4,7 +4,7 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema, WriterDraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, prepareDraft, sourcesTextMap, splitSentences, assertHeadingNamesCovered } from "@/lib/validate";
+import { validateDraft, prepareDraft, sourcesTextMap, splitSentences } from "@/lib/validate";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
 import type { SourceItem } from "@/lib/essay-types";
 import { saveDocxFile } from "@/lib/docx-store";
@@ -134,7 +134,6 @@ export async function POST(req: Request) {
         validate: async (d) => {
           prepareDraft(d, sourcesText, { deferEvidence: true });
           assertUncitedConclusion(d);
-          assertHeadingNamesCovered(d);
           const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources]);
           assertUncitedConclusion(d);
           assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);

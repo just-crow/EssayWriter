@@ -7,13 +7,43 @@ import { planParagraphs } from "./paragraph-plan";
 const ParagraphSchema = z.object({ paragraph: z.string().min(1) });
 const editorialIssue = /\b(?:this|the) (?:review|article|paper|source) (?:explores|focuses|discusses|examines|reviews|emphasizes|states|notes)\b|\bassigned findings?\b|\bas we embark|threshold of a new era|\b(?:figure|table)\s+\d+|^(?:when combined|this approach|this integration)\b/i;
 
+/** Standalone author-date debris lifted from source passages ("Mogo et al.,
+ * 2019).", "Knecht 2004)."): a whole sentence with no claim in it. Inline
+ * attributions inside real sentences ("Research by Wilson and Xiao (2023)
+ * indicates...") are legitimate prose and are kept. */
+export function isCitationDebris(sentence: string): boolean {
+  const t = sentence.trim().replace(/\[\^\d+\]/g, "").trim();
+  if (t.length < 4 || t.length > 120) return false;
+  if (!/\(\d{4}\)|\b\d{4}\b/.test(t)) return false;
+  // Nothing but capitalized name tokens plus a year and punctuation.
+  const rest = t.replace(/\bet al\b\.?/gi, "").replace(/\(\d{4}\)|\b\d{4}\b|[(),;.:\-–—]/g, "").trim();
+  const words = rest.split(/\s+/).filter(Boolean);
+  return words.length >= 1 && words.length <= 3 &&
+    words.every((w) => /^[A-Z][a-zÀ-ÿ\-']*\.?$/.test(w) || /^[A-Z]\.$/.test(w));
+}
+
+/** Routing labels leaked from task-based generation (">> section=2:",
+ * "<<end>>", "Paragraph 3:"): staging directions, never essay prose. */
+export function stripRoutingLabels(text: string): string {
+  return text
+    .replace(/>>\s*section\s*=?:?\s*\d+\s*:?/gi, "")
+    .replace(/<<[^<>]*>>/g, "")
+    .replace(/(^|[.!?]\s+)(?:paragraph|task|section)\s+\d+\s*:/gi, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export function cleanEssayVoice(paragraph: string): string {
   // These refer to the generation inputs or an absent source illustration,
   // rather than contributing a claim to the essay. Factual verification follows.
-  return splitSentences(paragraph).filter(sentence =>
+  const kept = splitSentences(paragraph).filter(sentence =>
     !/\b(?:figure|table)\s+\d+\s+(?:illustrates|shows|summari[sz]es|depicts)/i.test(sentence) &&
-    !/^(?:the|this) source that frames this discussion\b/i.test(sentence.trim())
-  ).join(" ").replace(/\*([^*]+)\*/g, "$1")
+    !/^(?:the|this) source that frames this discussion\b/i.test(sentence.trim()) &&
+    !isCitationDebris(sentence)
+  ).join(" ");
+  const cleaned = kept
+    .replace(/\*([^*]+)\*/g, "$1").replace(/‑/g, "-")
+    .replace(/\s*—\s*/g, ", ").replace(/;\s*/g, ". ")
     .replace(/(^|\s)>\s*(?=[A-Z])/g, "$1")
     .replace(/(\[\^\d+\]|[.!?])\s+\)\s+(?=[A-Z])/g, "$1 ")
     .replace(/(^|[.!?]\s+)(?:Moreover|Furthermore|Additionally),?\s+([a-z])/g, (_, before: string, next: string) => before + next.toUpperCase())
@@ -24,6 +54,7 @@ export function cleanEssayVoice(paragraph: string): string {
     .replace(/\s{2,}/g, " ")
     .replace(/\bThis (view|framework|interpretation|account) makes .*? relevant as\b/gi, "This suggests")
     .trim();
+  return stripRoutingLabels(cleaned);
 }
 
 /** Compose independently assigned source findings, never an essay from memory. */

@@ -53,7 +53,7 @@ export async function repairCitationMinimums(draft: EssayDraft, input: WritingIn
     // The remaining essay budget is checked again after source verification.
     const wordsPerSlot = Math.min(110, Math.floor(remainingWords / slots.length));
     const response = await completeJson({
-      system: "Extend the supplied verified essay only with the assigned source findings. Read the entire essay before writing. Do not repeat existing findings or rewrite existing prose. Return one brief addition for each slot in slot order. Use only that slot's observed finding, preserving qualifiers. Paraphrase it and explain its relevance to its section without inventing facts. Each addition ends with [^sourceId] for its assigned source. No other citations, introductions or conclusions. Minimum citation counts are floors, not caps.",
+      system: `Extend the supplied verified essay only with the assigned source findings. Read the entire essay before writing. Do not repeat existing findings or rewrite existing prose. Return one brief addition for each slot in slot order. Each addition must be no more than ${wordsPerSlot} words; brevity is a hard constraint. Use only that slot's observed finding, preserving qualifiers. Paraphrase it and explain its relevance to its section without inventing facts. Each addition ends with [^sourceId] for its assigned source. No other citations, introductions or conclusions. Minimum citation counts are floors, not caps. Never use the em dash character or the semicolon character.`,
       user: JSON.stringify({topic: input.topic, instructions: input.instructionText, extraInstructions: input.extraInstructions,
         verifiedEssay: draft, slots: slots.map(slot => ({...slot, heading: draft.sections[slot.section]?.heading})), wordsPerAddition: wordsPerSlot}),
       schema: z.object({additions: z.array(z.string().min(20)).length(slots.length)}),
@@ -62,7 +62,9 @@ export async function repairCitationMinimums(draft: EssayDraft, input: WritingIn
       validate: response => response.additions.forEach((text, index) => {
         const ids = [...text.matchAll(/\[\^(\d+)\]/g)].map(match => Number(match[1]));
         if (!ids.length || ids.some(id => id !== slots[index].sourceId)) throw new Error("Each addition must cite only its assigned source ID.");
-        if (text.replace(/\[\^\d+\]/g, "").split(/\s+/).length > wordsPerSlot) throw new Error(`Keep each addition within ${wordsPerSlot} words.`);
+        // The model writes 80-100 words minimum for a cited addition with
+        // analysis; the remaining-words budget is rechecked after auditing.
+        if (text.replace(/\[\^\d+\]/g, "").split(/\s+/).filter(Boolean).length > wordsPerSlot + 30) throw new Error(`Keep each addition within ${wordsPerSlot + 30} words.`);
       }),
     }, nimChatLong);
     // Separate sections retain slot order and let the auditor index each

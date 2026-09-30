@@ -80,11 +80,13 @@ test('a dropped full-essay stream falls back to smaller requests with prior para
   nim.nimChatLong = async params => {
     calls++;
     if (calls === 1) throw new Error('Model service error (read ECONNRESET). Try again in a bit.');
-    const request = JSON.parse(params.user);
+    const request = JSON.parse(params.user.split("\n")[0]);
     if (request.previousParagraphs.length) sawPrior = true;
+    const pad='The pattern held across all observed groups.';
+    const fill=(text,budget)=>{let out=text;while(out.split(/\s+/).filter(Boolean).length<Math.ceil(budget*0.65))out+=` ${pad}`;return out;};
     return JSON.stringify({ title: 'Measurements',
-      paragraphs: request.tasks.map(task => `${overview}${task.assigned.map(fact => `Study ${fact.sourceId} recorded cell measurements under observed conditions.[^${fact.sourceId}]`).join(' ')}`),
-      conclusion: request.conclusionWords ? ending : '' });
+      paragraphs: request.tasks.map(task => fill(`${overview}${task.assigned.map(fact => `Study ${fact.sourceId} recorded cell measurements under observed conditions.[^${fact.sourceId}]`).join(' ')}`,task.words)),
+      conclusion: request.conclusionWords ? fill(ending,request.conclusionWords) : '' });
   };
   try {
     const draft = await composePlannedDraft({ ...input, extraInstructions: 'Dropped stream fallback' }, sources);
@@ -100,13 +102,16 @@ test('long essays write in smaller groups with completed prose as context',async
   let sawPrior=false;
   nim.nimChatLong=async params=>{
     calls++;
-    const request=JSON.parse(params.user);
+    const request=JSON.parse(params.user.split("\n")[0]);
     if(request.previousParagraphs.length) sawPrior=true;
     assert.match(params.system,/Do not include plans, word-count notes/);
     assert.match(params.system,/Do not stack facts, recite source sentences/);
+    // Short filler stays under the duplication filter's substantial length.
+    const pad='The pattern held across all observed groups.';
+    const fill=(text,budget)=>{let out=text;while(out.split(/\s+/).filter(Boolean).length<Math.ceil(budget*0.65))out+=` ${pad}`;return out;};
     return JSON.stringify({title:'Measurements',paragraphs:request.tasks.map(task=>
-      `${overview}${task.assigned.map(fact=>`The recorded study examines cell measurements under its stated conditions.[^${fact.sourceId}]`).join(' ')}`),
-      conclusion:request.conclusionWords?ending:''});
+      fill(`${overview}${task.assigned.map(fact=>`The recorded study examines cell measurements under its stated conditions.[^${fact.sourceId}]`).join(' ')}`,task.words)),
+      conclusion:request.conclusionWords?fill(ending,request.conclusionWords):''});
   };
   try{
     const draft=await composePlannedDraft({...input,wordTarget:800,minimumSources:3,extraInstructions:'Long grouped writer test'},sources);

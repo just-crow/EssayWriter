@@ -27,8 +27,16 @@ export function sourceFindingSentences(content: string): string[] {
   return splitSentences(clean).map(text => text.replace(/^[\s*_[\]()#-]+/g, "").trim()).filter(text => {
     const count = text.split(/\s+/).length;
     // Questions on a page are research prompts, not factual findings to cite.
+    // Methods boilerplate (search strings, eligibility criteria) concentrates
+    // rare terms and outranks real findings in relevance scoring, then leaves
+    // the writer with nothing citable. Exclude it at the source.
+    if (/\b(search terms?|search strategy|databases? searched|inclusion criteria|exclusion criteria|PRISMA|boolean operators?)\b/i.test(text)) return false;
+    if (text.includes("*") && /\bOR\b/.test(text)) return false;
+    // Funding, acknowledgment, and disclosure sentences are boilerplate, not
+    // evidence: citing grant numbers pads essays with off-topic filler.
     return count >= 6 && count <= 100 && /[.!]["”']?$/.test(text.trim()) &&
-      !/\b(?:this|the) (?:abstract|review|article|paper|session|conference) (?:explores|focuses|discusses|examines|reviews|aims|highlights)|\bwe (?:(?:will|also)\s+)*(?:discuss|explore)|\b(?:figure|table)\s+\d+\s+(?:illustrates|shows)|\b(?:this session is important|key highlights include|will be discussed)\b|creative commons|subscribe|sign up|distributed under the terms/i.test(text);
+      !/\b(?:this|the) (?:abstract|review|article|paper|session|conference) (?:explores|focuses|discusses|examines|reviews|aims|highlights)|\bwe (?:(?:will|also)\s+)*(?:discuss|explore)|\b(?:figure|table)\s+\d+\s+(?:illustrates|shows)|\b(?:this session is important|key highlights include|will be discussed)\b|creative commons|subscribe|sign up|distributed under the terms/i.test(text) &&
+      !/\b(funded (?:in part )?by|funding (?:was|were|received|provided)|grants? (?:no\.?|numbers?|r\d\w+)|acknowledg|conflicts? of interest|competing interests?|ethics (?:approval|committee)|institutional review board|written informed consent)\b/i.test(text);
   });
 }
 
@@ -89,7 +97,9 @@ export function planParagraphs(input: {
     Math.round(input.wordTarget / 150) - 2 - Number(Boolean(closingJudgment)),
     (input.minimumSources || 1) - 1, (input.minimumFootnotes || 1) - 1, 1);
   const endWords = Math.max(35, Math.min(120, Math.round(input.wordTarget / 8)));
-  const bodyWords = Math.max(60, Math.round((input.wordTarget - 2 * endWords) / count));
+  // Budgets run above the nominal share: writers under-write to roughly
+  // two-thirds of budget, and the ±400-word tolerance absorbs overshoot.
+  const bodyWords = Math.max(75, Math.round(((input.wordTarget - 2 * endWords) / count) * 1.25));
   const bank = sources.flatMap(source => sourceFindingSentences(source.content)
     .map(text => ({ sourceId: Number(source.id), title: source.title, text, tokens: terms(text), key: normQuote(text), quality: sourceQualityFactor(source) })));
   if (!bank.length) throw new Error("The selected pages contain no substantive findings. Gather sources again.");
@@ -189,7 +199,10 @@ export function planParagraphs(input: {
   });
   const weights = body.map(task => Math.sqrt(task.assigned.reduce((n, fact) => n + fact.text.split(/\s+/).length, 0)));
   const weightTotal = weights.reduce((a, b) => a + b, 0);
-  const extraWords = Math.max(0, input.wordTarget - endWords * 2 - body.length * 60);
+  // Writers under-write to roughly two-thirds of budget; plan 25% above the
+  // nominal target so verified essays land near it. The ±400-word tolerance
+  // absorbs overshoot, and per-paragraph minima hold the floor.
+  const extraWords = Math.max(0, Math.round(input.wordTarget * 1.25) - endWords * 2 - body.length * 60);
   body.forEach((task, index) => { task.words = 60 + Math.round(extraWords * weights[index] / weightTotal); });
   const intro = { index: 0, role: "introduction", section: -1, words: endWords,
     point: [outline.thesis || input.topic, introductionBrief].filter(Boolean).join(" "), criterion: "", strand: "", ...assign(outline.thesis || input.topic, -1, endWords, true) };

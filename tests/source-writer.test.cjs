@@ -47,7 +47,15 @@ test('repetition instructions remain advisory and do not reject otherwise valid 
     if (params.user.includes('Paragraph role: introduction')) return JSON.stringify({ paragraph: `${opening}[^${finding.sourceId}]` });
     assert.ok(params.user.includes(opening));
     assert.match(params.system, /Avoid repeating sentences within or across paragraphs/);
-    if (++bodyAttempts === 1) return JSON.stringify({ paragraph: `${opening.split('. ')[0]}. ${fresh}[^${finding.sourceId}]` });
+    if (++bodyAttempts === 1) {
+      // Word budgets scale with the essay target; pad the fixed mock prose
+      // to the requested floor so the mock stays a valid paragraph.
+      const words = Number(params.user.match(/approximately (\d+) words/)[1]);
+      const filler = 'These distinctions remain within the measurements described by the researchers.';
+      let paragraph = `${opening.split('. ')[0]}. ${fresh}`;
+      while (paragraph.split(/\s+/).filter(Boolean).length < Math.ceil(words * 0.65)) paragraph += ` ${filler}`;
+      return JSON.stringify({ paragraph: `${paragraph}[^${finding.sourceId}]` });
+    }
     assert.match(params.user, /This paragraph repeats substantial sentences already written/);
     return JSON.stringify({ paragraph: `${fresh}[^${finding.sourceId}]` });
   };

@@ -253,48 +253,70 @@ export function assertStructureUsable(s: EssayStructure): void {
   }
 }
 
-/** Small generic function-word set for heading analysis. Plain English,
- * unrelated to any subject or field. */
-const HEADING_FUNCTION_WORDS = new Set(
-  "a an the and or of to in on for with versus vs via per among between through during".split(" ")
-);
-
-/** Minimal stemmer so adjectival and plural heading forms match body text
- * (e.g. a heading adjective matches its base noun in the paragraphs). */
-function headingStem(word: string): string {
-  let w = word.toLowerCase();
-  if (w.endsWith("ies") && w.length > 4) w = w.slice(0, -3) + "y";
-  else if (w.endsWith("s") && !w.endsWith("ss") && w.length > 4) w = w.slice(0, -1);
-  for (const suffix of ["ical", "ian", "ean", "ist", "ism"]) {
-    if (w.endsWith(suffix) && w.length - suffix.length >= 4) { w = w.slice(0, -suffix.length); break; }
-  }
-  return w;
+/** Requirement coverage, built deterministically server-side: every outline
+ * checklist item is matched against each essay part by shared stemmed terms.
+ * Word-count items are skipped here; the route reports them from the actual
+ * word count. Generic and topic-agnostic. */
+export interface CoverageItem {
+  item: string;
+  met: boolean;
+  location: string;
 }
 
-/** Every substantive capitalized word in a heading is a promise about that
- * section's content (a name, theory, place, or case). The opening token is
- * skipped because headings conventionally start capitalized regardless of
- * meaning. Matching is case-insensitive against the section body, with
- * light stemming for plurals and adjectives. Throws a retryable error
- * listing the uncovered terms. */
-export function assertHeadingNamesCovered(draft: EssayDraft): void {
-  for (const section of draft.sections) {
-    const heading = section.heading || "";
-    const tokens = [...heading.matchAll(/\b([A-Za-z][a-z]{3,})\b/g)].map((m) => m[1]);
-    // Skip the opening token: its capitalization carries no meaning.
-    const names = tokens.slice(1).filter((t) => !HEADING_FUNCTION_WORDS.has(t.toLowerCase()));
-    if (names.length === 0) continue;
-    const body = section.paragraphs.join(" ").toLowerCase();
-    const missing = names.filter((n) => {
-      const lower = n.toLowerCase();
-      return !body.includes(lower) && !body.includes(headingStem(n));
-    });
-    if (missing.length > 0) {
-      throw new Error(
-        `The section “${heading}” promises ${missing.join(", ")} but never discusses them. Cover each named item in that section with evidence, or remove the name from the heading.`
-      );
+const WORD_COUNT_ITEM = /\b\d+\s*-?\s*words?\b|\bword\s*(?:target|count)\b/i;
+
+/** Style and process requirements are enforced by prompts and validators,
+ * not locatable in prose: an essay never contains the words "academic
+ * style", "hedging", or "paragraph openers". Excluding them keeps coverage
+ * honest instead of permanently unmet. */
+const STYLE_PROCESS_ITEM = /\bacademic style\b|analysis,?\s+not just description|varied .*openers?|paragraph structures?|hedg\w*|ai crutches|prohibited punctuation|em dash|semicolon|internal .*rules?|citation mechanics|fresh wording|no citations in conclusion/i;
+
+/** Universal rhetorical moves: satisfied by standard signal phrases even
+ * when the requirement's exact noun is paraphrased away. */
+const RHETORICAL_SIGNALS: Array<[RegExp, RegExp]> = [
+  [/\bcounterarguments?\b/i, /\bcounter-?arguments?\b|\bobjections?\b|\bopportunity costs?\b|\btrade-?offs?\b|\bon the other hand\b|\bcritics argue\b/],
+  [/\blimitations?\b/i, /\blimitations?\b|\bdrawbacks?\b|\bdownsides?\b|\bconstraints?\b|\bchallenges?\b/],
+  [/\bcomparisons?\b/i, /\bcomparisons?\b|\bcompared\b|\bin contrast\b|\bwhereas\b/],
+  [/\bevaluations?\b/i, /\bevaluations?\b|\bassessments?\b|\bweigh\w*\b/],
+  [/\bjudg?ements?\b/i, /\bjudg?ements?\b/],
+];
+
+export function buildCoverage(checklist: string[], draft: EssayDraft): CoverageItem[] {
+  const parts = [
+    { label: "Introduction", text: draft.introduction.join(" ") },
+    ...draft.sections.map((s) => ({ label: `Section “${s.heading}”`, text: `${s.heading} ${s.paragraphs.join(" ")}` })),
+    { label: "Conclusion", text: draft.conclusion.join(" ") },
+  ];
+  const out: CoverageItem[] = [];
+  const essayText = parts.map((p) => p.text).join("\n");
+  for (const item of checklist) {
+    if (!item.trim() || WORD_COUNT_ITEM.test(item) || STYLE_PROCESS_ITEM.test(item)) continue;
+    const wanted = distinctiveTerms(item);
+    let location = "";
+    let best = 0;
+    // Short items (three or fewer distinctive terms) match on a single
+    // shared term; longer items need proportionally more.
+    const need = wanted.length <= 3 ? 1 : Math.max(2, Math.ceil(wanted.length / 3));
+    for (const part of parts) {
+      const words = new Set((normQuote(part.text).match(/[a-z0-9]+/g) ?? []).map(stemTerm));
+      const hits = wanted.filter((t) => words.has(stemTerm(t))).length;
+      if (wanted.length > 0 && hits >= need && hits > best) {
+        best = hits;
+        location = part.label;
+      }
     }
+    if (!location) {
+      // Fall back to rhetorical signals before reporting unmet.
+      for (const [namePattern, signalPattern] of RHETORICAL_SIGNALS) {
+        if (namePattern.test(item) && signalPattern.test(essayText)) {
+          location = parts.find((p) => signalPattern.test(p.text))?.label || "Conclusion";
+          break;
+        }
+      }
+    }
+    out.push({ item, met: location !== "", location });
   }
+  return out;
 }
 
 export type ValidationIssue = { code: string; detail: string };
@@ -328,10 +350,35 @@ function wordSet(s: string): Set<string> {
   return new Set((normQuote(s).match(/[a-z0-9]+/g) ?? []).filter((word) => word.length > 2 && !STOP_WORDS.has(word)));
 }
 
-/** Plural-insensitive stem shared by claim and passage terms. Consistent on
+/** Morphology-insensitive stem shared by claim and passage terms. Handles
+ * plurals, verb inflections, and common nominalizations so faithful
+ * paraphrases ("associated" for "association") still match. Consistent on
  * both sides matters more than linguistic perfection. */
 function stemTerm(word: string): string {
-  return word.length > 4 && word.endsWith("s") && !/(ss|us|is)$/.test(word) ? word.slice(0, -1) : word;
+  let w = word;
+  if (w.length > 5 && w.endsWith("ies")) w = w.slice(0, -3) + "y";
+  else if (w.length > 4 && w.endsWith("s") && !/(ss|us|is)$/.test(w)) w = w.slice(0, -1);
+  if (w.length > 6 && w.endsWith("ing")) w = w.slice(0, -3);
+  else if (w.length > 5 && w.endsWith("ed")) w = w.slice(0, -2);
+  if (w.length > 7 && w.endsWith("ation")) w = w.slice(0, -5) + "e";
+  else if (w.length > 7 && w.endsWith("ition")) w = w.slice(0, -5) + "e";
+  else if (w.length > 6 && w.endsWith("tion")) w = w.slice(0, -4) + "e";
+  else if (w.length > 6 && w.endsWith("ment")) w = w.slice(0, -4);
+  else if (w.length > 6 && w.endsWith("ness")) w = w.slice(0, -4);
+  else if (w.length > 5 && w.endsWith("ly")) w = w.slice(0, -2);
+  return w;
+}
+
+/** Shared word root of at least 6 characters (e.g. "associa" in both
+ * "associated" and "association"). Catches derivational pairs the stemmer
+ * reduces differently. Antonym pairs with different first letters
+ * ("increase"/"decrease") never share a prefix, so this stays safe. */
+export function sharesRoot(a: string, b: string): boolean {
+  if (a === b) return true;
+  const n = Math.min(a.length, b.length);
+  let common = 0;
+  while (common < n && a[common] === b[common]) common++;
+  return common >= 6;
 }
 
 /** Distinctive claim terms: content words an entailing passage must share.
@@ -348,6 +395,19 @@ export function distinctiveTerms(text: string): string[] {
   return [...terms];
 }
 
+/** Repair orphans left by sentence deletion: stray period fragments (". ."),
+ * lowercase sentence starts ("not automatic. they depend"), and non-breaking
+ * hyphens. Audit-aware sentence splitting keeps abbreviations ("e.g.") intact,
+ * so a lowercase start always means a lost antecedent. Generic cleanup for
+ * any verified paragraph. */
+export function tidyVerifiedParagraph(text: string): string {
+  const kept = splitSentences(text)
+    .map((s) => s.replace(/^\s*[)\]"'›»]+\s*/, "").trim())
+    .filter((s) => /[a-z0-9]/i.test(s))
+    .map((s) => s.replace(/^(\[\^\d+\]\s*)*([a-z])/, (_m, markers: string | undefined, ch: string) => `${markers || ""}${ch.toUpperCase()}`));
+  return kept.join(" ").replace(/\s+([.,!?])/g, "$1").replace(/\s{2,}/g, " ").replace(/‑/g, "-").trim();
+}
+
 /** Lexical entailment gate. Returns the claim's distinctive terms absent from
  * the supporting passage text (empty = covered). Short generic claims with
  * fewer than 4 distinctive terms are skipped as unjudgeable. Otherwise the
@@ -359,12 +419,16 @@ export function distinctiveTerms(text: string): string[] {
 export function uncoveredClaimTerms(claim: string, passageText: string): string[] {
   const wanted = distinctiveTerms(claim);
   const normPassage = normQuote(passageText);
-  const passageStems = new Set(
-    (normPassage.match(/[a-z0-9]+/g) ?? []).map(stemTerm)
-  );
+  const passageWords = normPassage.match(/[a-z0-9]+/g) ?? [];
+  const passageStems = new Set(passageWords.map(stemTerm));
+  const covered = (term: string): boolean => {
+    const stem = stemTerm(term);
+    if (passageStems.has(stem)) return true;
+    return passageWords.some((pw) => sharesRoot(stem, stemTerm(pw)));
+  };
   let termMissing: string[] = [];
   if (wanted.length >= 4) {
-    termMissing = wanted.filter((term) => !passageStems.has(stemTerm(term)));
+    termMissing = wanted.filter((term) => !covered(term));
     const matched = wanted.length - termMissing.length;
     const needed = wanted.length <= 4 ? 2 : wanted.length <= 7 ? 3 : 4;
     if (matched >= needed || matched / wanted.length >= 0.6) termMissing = [];
@@ -648,6 +712,8 @@ export function consolidateSectionParagraphs(draft: EssayDraft): void {
  * Restore omitted markers only from evidence already checked against its
  * actual source text. Never assign an arbitrary bibliography entry. */
 export function prepareDraft(draft: EssayDraft, sourcesText: Map<string, string>, options: { deferEvidence?: boolean } = {}): void {
+  // Titles bypass paragraph cleaning but face the same style bans.
+  draft.title = draft.title.replace(/‑/g, "-").replace(/\s*—\s*/g, ", ").replace(/;\s*/g, ". ").replace(/\s{2,}/g, " ").trim();
   assertDraftUsable(draft);
   const ids = draft.footnotes.map((f) => f.id);
   if (new Set(ids).size !== ids.length) throw new Error("The essay has duplicate footnote IDs. Give each source a distinct ID.");

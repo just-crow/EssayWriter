@@ -19,7 +19,7 @@ import { buildWritingPlan, composePlannedDraft } from "@/lib/planned-writer";
 import { structuralSectionRole } from "@/lib/paragraph-plan";
 import { removeOffTopicProse } from "@/lib/topic-relevance";
 import { groupCitationRuns } from "@/lib/citation-runs";
-import { assertHeadingNamesCovered } from "@/lib/validate";
+import { buildCoverage } from "@/lib/validate";
 import { assertCitationMinimums, assertUncitedConclusion, citationCounts } from "@/lib/citation-limits";
 import { workIdentity } from "@/lib/work-identity";
 import { repairCitationMinimums } from "@/lib/citation-repair";
@@ -120,7 +120,6 @@ export async function POST(req: Request) {
           if (d.sections.some(section => structuralSectionRole(section.heading) !== null)) {
             throw new Error("Introduction and conclusion must appear only in their dedicated essay fields, not as cited body sections.");
           }
-          assertHeadingNamesCovered(d);
           d.footnotes = writingSources.map((source) => ({
             id: Number(source.id), author: source.author, title: source.title,
             publisher: source.publisher || source.container, year: source.year,
@@ -202,7 +201,16 @@ export async function POST(req: Request) {
       async (params) => {
         const failure = params.user.split("VALIDATION FAILURE:\n")[1]?.split("\n\nPREVIOUS RESPONSE:")[0] || "";
         const priorJson = params.user.split("\n\nPREVIOUS RESPONSE:\n")[1]?.split("\n\nReturn one complete corrected JSON object")[0];
-        const previous = priorJson ? writerDraftSchema().safeParse(JSON.parse(priorJson)) : undefined;
+        // The slice can be truncated or contain model chatter; a failed parse
+        // must fall back to unguided recomposition, never crash the draft.
+        let previous: ReturnType<ReturnType<typeof writerDraftSchema>["safeParse"]> | undefined;
+        if (priorJson) {
+          try {
+            previous = writerDraftSchema().safeParse(JSON.parse(priorJson));
+          } catch {
+            previous = undefined;
+          }
+        }
         signal.throwIfAborted();
         // The inner composition already retries once with the missing-IDs
         // feedback. If the model still omits reserved works (or source IDs /
@@ -219,7 +227,7 @@ export async function POST(req: Request) {
             last = e;
             signal.throwIfAborted();
             const msg = e instanceof Error ? e.message : String(e ?? "");
-            if (!/omitted reserved works|Use only source IDs|word synopsis|approximately .* words/i.test(msg)) throw e;
+            if (!/omitted reserved works|Use only (the )?source IDs|word synopsis|approximately .* words|cited 0 distinct works|below the requested|needs at least one citation|with \[\^sourceId\] markers|toward their word budgets|developed conclusion/i.test(msg)) throw e;
             guided = `${failure}\n${msg}`.trim();
           }
         }
@@ -228,6 +236,17 @@ export async function POST(req: Request) {
     );
     const issues = validateDraft(draft);
     const wordCount = countWords(draft);
+    // Agent-style coverage report: every outline requirement located in the
+    // essay, plus the word-target row from the actual count.
+    try {
+      const checklist = (JSON.parse(body.structureJson) as { checklist?: unknown }).checklist;
+      draft.coverage = Array.isArray(checklist)
+        ? [...buildCoverage(checklist.filter((c): c is string => typeof c === "string"), draft),
+          { item: `Meet the ${body.wordTarget}-word target`, met: Math.abs(wordCount - body.wordTarget) <= 400, location: `${wordCount} words` }]
+        : draft.coverage;
+    } catch {
+      // keep the writer's coverage when the outline cannot be read
+    }
     if (body.wordTarget >= 600 && wordCount < Math.ceil(body.wordTarget * 0.85)) {
       issues.push({code: "BELOW_TARGET_DEPTH", detail: `The verified essay is ${wordCount} words for a ${body.wordTarget}-word target. Source checks removed unsupported material; review the draft trace for depleted sections.`});
     }

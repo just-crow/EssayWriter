@@ -40,7 +40,9 @@ async function composeInChunks(
   feedback: string,
   signal?: AbortSignal
 ): Promise<{ title: string; paragraphs: string[]; conclusion: string }> {
-  const groupCount = input.wordTarget >= 1000 ? 3 : 2;
+  // Small response groups stay clear of provider output caps: a rambling
+  // long group aborts the whole essay, while an extra short call is cheap.
+  const groupCount = plan.tasks.length > 4 ? 4 : plan.tasks.length > 2 ? 2 : 1;
   const groupSize = Math.max(1, Math.ceil(plan.tasks.length / groupCount));
   const groups = Array.from({ length: Math.ceil(plan.tasks.length / groupSize) }, (_, index) =>
     plan.tasks.slice(index * groupSize, (index + 1) * groupSize));
@@ -51,7 +53,7 @@ async function composeInChunks(
     signal?.throwIfAborted();
     const last = index === groups.length - 1;
     const result = await completeJson({
-      system: `Continue a source-based academic essay. ${SOURCE_BASED_ARGUMENT_GUIDANCE} Return JSON with title, paragraphs, and conclusion. Write exactly one finished prose paragraph for each supplied task in order, close to its word budget. Do not include plans, word-count notes, source titles, source excerpts, lists, or explanations of what you will write. Paraphrase each finding and use only that task's assigned findings for specialised facts. Cite each factual run with [^sourceId], closing one source's run before using another source. A closing marker may cover consecutive sentences supported by the same work. The earlier paragraphs are context: advance their argument without repeating their findings, examples, or wording. Keep claims qualified to the supplied evidence. Explain significance and limitations warranted by that evidence, without inventing facts. Use natural academic prose, no em dashes or semicolons. ${last ? "Write a citation-free conclusion that synthesizes only the completed essay, with no new information." : "Set conclusion to an empty string; the final group will write it."}`,
+      system: `Continue a source-based academic essay. ${SOURCE_BASED_ARGUMENT_GUIDANCE} Return JSON with title, paragraphs, and conclusion. Write exactly one finished prose paragraph for each supplied task in order, close to its word budget. Do not include plans, word-count notes, source titles, source excerpts, lists, or explanations of what you will write. Paraphrase each finding and use only that task's assigned findings for specialised facts. Keep each paragraph under its own task's section; never move material into another section and never emit routing labels, task indexes, or staging directions. State magnitudes, extents, and comparisons only with quantities stated in the passage; drop bare intensifiers (significantly, dramatically, substantially, markedly, clearly, robust) unless the passage uses them. Cite each factual run with [^sourceId], closing one source's run before using another source. A closing marker may cover consecutive sentences supported by the same work. Every body paragraph and the introduction MUST contain at least one [^sourceId] citation to its own assigned findings, even a primarily evaluative paragraph: open with the assigned finding, then evaluate it. A body or introduction paragraph without any citation marker is a defect. When paraphrasing, retain the passage's key terms verbatim (group names, measures, outcomes, qualifiers) instead of substituting synonyms: if the passage says disadvantaged groups have less access, do not rewrite it as marginalized groups experience limited access. Each cited sentence must share its source's vocabulary so the claim stays traceable to its passage. The earlier paragraphs are context: advance their argument without repeating their findings, examples, or wording. Keep claims qualified to the supplied evidence. Explain significance and limitations warranted by that evidence, without inventing facts. Use natural academic prose, no em dashes or semicolons. ${last ? "Write a citation-free conclusion that synthesizes only the completed essay, with no new information." : "Set conclusion to an empty string; the final group will write it."}`,
       user: JSON.stringify({ topic: input.topic, instructions: input.instructionText, extraInstructions: input.extraInstructions,
         thesis: plan.thesis, feedback, previousParagraphs: paragraphs,
         tasks: tasks.map(task => writerTask(task, plan.headings)),
@@ -59,7 +61,7 @@ async function composeInChunks(
         output: { title: "essay title", paragraphs: tasks.map(task => `paragraph for index ${task.index}`), conclusion: last ? "final synthesis" : "" } }),
       schema: z.object({ title: z.string(), paragraphs: z.array(z.string().min(120)).length(tasks.length), conclusion: z.string() }),
       responseFormat: { type: "json_object" },
-      thinking: true, lowEffort: true, reasoningBudget: 256,
+      thinking: true, lowEffort: true, reasoningBudget: 128,
       temperature: 0.4, maxTokens: Math.max(2500, tasks.reduce((total, task) => total + task.words, 0) * 5 + 600),
       timeoutMs: 90_000, tries: 1, parseTries: 2, retryTempDelta: 0, signal,
       validate: value => {
@@ -69,7 +71,28 @@ async function composeInChunks(
             .map(match => Number(match[1]))
             .filter(id => !tasks[paragraphIndex].assigned.some(finding => finding.sourceId === id)));
         if (invalid.length) throw new Error(`Use only the source IDs assigned to each paragraph, not ${invalid.join(", ")}.`);
+        // A paragraph with no markers at all would pass the check above
+        // silently and fail the whole essay at the end. Demand the citation
+        // here, where the retry still has the paragraph's assigned findings.
+        const uncited = value.paragraphs
+          .map((paragraph, paragraphIndex) => ({ paragraph, paragraphIndex }))
+          .filter(({ paragraph, paragraphIndex }) => tasks[paragraphIndex].role !== "conclusion" && !/\[\^\d+\]/.test(paragraph))
+          .map(({ paragraphIndex }) => tasks[paragraphIndex].index);
+        if (uncited.length) throw new Error(`Cite the assigned findings in paragraph indexes ${uncited.join(", ")} with [^sourceId] markers. Every body paragraph needs at least one citation.`);
+        // Writers under-write: hold every paragraph to two-thirds of its word
+        // budget and the conclusion to two-thirds of its target, while the
+        // retry still has context. The ±400-word tolerance absorbs overshoot.
+        // Budgets run 25% above nominal and writers reach roughly 70% of
+        // nominal, so the floor sits at 55% of budget: it truncates the weak
+        // tail without demanding output the model cannot sustain.
+        const proseWords = (text: string) => text.replace(/\[\^\d+\]/g, "").split(/\s+/).filter(Boolean).length;
+        const thin = value.paragraphs
+          .map((paragraph, paragraphIndex) => ({ paragraph, paragraphIndex }))
+          .filter(({ paragraph, paragraphIndex }) => proseWords(paragraph) < Math.max(45, Math.round(tasks[paragraphIndex].words * 0.55)))
+          .map(({ paragraphIndex }) => tasks[paragraphIndex].index);
+        if (thin.length) throw new Error(`Develop paragraph indexes ${thin.join(", ")} toward their word budgets with more assigned evidence and analysis. Thin paragraphs leave the essay short of its target.`);
         if (last && /\[\^\d+\]/.test(value.conclusion)) throw new Error("The conclusion must have no citations.");
+        if (last && proseWords(value.conclusion) < Math.max(35, Math.round(plan.endWords * 0.55))) throw new Error(`Write a developed conclusion of at least ${Math.max(35, Math.round(plan.endWords * 0.55))} words restating the thesis and key reasons, not meta-commentary about the discussion.`);
       },
     }, nimChatLong);
     title = result.title || title;

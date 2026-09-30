@@ -34,14 +34,33 @@ export function isShoutingTitle(raw: string): boolean {
   return t.length >= 24 && /^[A-Z0-9\s\-–:;,.()&']+$/.test(t) && /[A-Z]{4,}/.test(t);
 }
 
+/** Repair double-encoded UTF-8 sequences common in search-result titles
+ * (e.g. neuronal "â€“" for an en dash). Generic byte-level fix, independent
+ * of subject or site. */
+export function repairMojibake(text: string): string {
+  const table: Array<[RegExp, string]> = [
+    [/â€“/g, "–"], [/â€”/g, "–"], [/â€™/g, "'"], [/â€˜/g, "'"], [/â€œ/g, "\u201C"], [/â€/g, "\u201D"],
+    [/Ã©/g, "é"], [/Ã¨/g, "è"], [/Ãª/g, "ê"], [/Ã«/g, "ë"], [/Ã®/g, "î"], [/Ã´/g, "ô"],
+    [/Ã¶/g, "ö"], [/Ã¼/g, "ü"], [/Ã§/g, "ç"], [/Ã±/g, "ñ"], [/Ã¡/g, "á"], [/Ã /g, "à"],
+    [/Â /g, " "], [/Â/g, ""],
+  ];
+  let out = text;
+  for (const [pattern, fix] of table) out = out.replace(pattern, fix);
+  return out;
+}
+
 /** Clean raw search titles: strip (PDF) prefixes, file extensions,
- * excessive punctuation and ALL-CAPS shouting while preserving meaning. */
+ * excessive punctuation and ALL-CAPS shouting while preserving meaning.
+ * Em dashes become en dashes so titles comply with the essay style ban
+ * that covers footnotes and Works Cited. */
 export function cleanSourceTitle(raw: string): string {
-  let t = (raw || "").trim();
+  // Mojibake runs (a replacement char plus stray question marks) stand for
+  // a mangled dash or separator in search-result titles.
+  let t = repairMojibake(raw || "").replace(/\s*�+\?*\s*/g, " - ").replace(/[�\u0000-\u001F\u007F-\u009F]/g, "").trim();
   t = t.replace(/^\(?\s*PDF\s*\)?\s*[-–:|.]?\s*/i, "");
   t = t.replace(/\.(pdf|docx?|pptx?)\s*$/i, "");
   t = t.replace(/\s*[|·•\-–—]+\s*$/g, "").trim();
-  t = t.replace(/\s{2,}/g, " ").replace(/\.{2,}/g, "").trim();
+  t = t.replace(/\s{2,}/g, " ").replace(/\.{2,}/g, "").replace(/—/g, "–").trim();
   // Title-case shouting while preserving meaning.
   if (isShoutingTitle(t)) {
     const lower = t.toLowerCase();
