@@ -207,7 +207,13 @@ export async function auditAndAlignGrounding(
             claim.status = "nonfactual";
             claim.reason += " Epistemic qualification about the limits of evidence, not a new factual claim.";
           }
-          if (!isConclusion && (factualAssertion || specificMeasurement || concernAssertion) && !elementaryKnowledge && !absenceStatement && claim.status !== "supported" && claim.status !== "partially_supported" && claim.status !== "unsupported") {
+          // Position statements ("cities should prioritize X", "the qualified
+          // judgment is Y") argue rather than report; the auditor already
+          // labels them nonfactual. Forcing them into "unsupported" whenever
+          // they mention a risk deletes every thesis. Concrete numbers stay
+          // verifiable regardless of framing.
+          const positionStatement = /\bqualified judg?ment\b|\bshould (?:invest|prioritize|pursue|direct|focus|adopt|treat|assess|consider)\b/i.test(claim.sentence);
+          if (!isConclusion && (factualAssertion || specificMeasurement || concernAssertion) && !elementaryKnowledge && !absenceStatement && !positionStatement && claim.status !== "supported" && claim.status !== "partially_supported" && claim.status !== "unsupported") {
             claim.status = "unsupported";
             claim.reason += " This contains a factual research, measurement, or risk assertion that needs direct cited support.";
           }

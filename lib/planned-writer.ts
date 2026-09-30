@@ -63,7 +63,7 @@ async function composeInChunks(
       responseFormat: { type: "json_object" },
       thinking: true, lowEffort: true, reasoningBudget: 128,
       temperature: 0.4, maxTokens: Math.max(2500, tasks.reduce((total, task) => total + task.words, 0) * 5 + 600),
-      timeoutMs: 90_000, tries: 1, parseTries: 2, retryTempDelta: 0, signal,
+      timeoutMs: 90_000, tries: 1, parseTries: 3, retryTempDelta: 0, signal,
       validate: value => {
         value.paragraphs = value.paragraphs.map(normalizeCitationMarkers);
         // Citations must come from the essay's evidence plan. Prefer each

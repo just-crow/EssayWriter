@@ -127,7 +127,16 @@ export async function POST(req: Request) {
           }));
           prepareDraft(d, sourcesText, { deferEvidence: true });
           assertUncitedConclusion(d);
-          const offTopic = await removeOffTopicProse(d, body.topic, signal, body.structureJson);
+          // Auxiliary review: a provider outage here must not discard an
+          // otherwise writable essay. The grounding audit below enforces
+          // topicality independently (off-topic claims fail verification).
+          let offTopic: string[] = [];
+          try {
+            offTopic = await removeOffTopicProse(d, body.topic, signal, body.structureJson);
+          } catch (error) {
+            signal.throwIfAborted();
+            diagnostics.topicReviewSkipped = error instanceof Error ? error.message : "Topic review unavailable.";
+          }
           diagnostics.stages.push(snapshotDraft(d, "Topic review"));
           const audit = await auditAndAlignGrounding(d, sourceItems, { signal, batchSize: 2, fast: true, topic: body.topic });
           const removedClaims = [...offTopic, ...audit.removed];

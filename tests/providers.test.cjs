@@ -162,6 +162,15 @@ test('provider tagging leaves logic errors untouched', () => {
   assert.equal(tagged.status, 503);
 });
 
+test('bare upstream failures are tagged and retried', () => {
+  // Mid-stream provider failures arrive without HTTP status.
+  const bare = new Error('Service temporarily overloaded');
+  const tagged = tagProviderError('nvidia', bare);
+  assert.match(tagged.message, /NVIDIA error: Service temporarily overloaded/);
+  const wrapped = new Error('Model service error (x). Try again in a bit.');
+  assert.equal(tagProviderError('openrouter', wrapped), wrapped);
+});
+
 test('cancellation stops before any provider request or fallback', async () => {
   const controller=new AbortController();
   controller.abort(new Error('Draft cancelled'));

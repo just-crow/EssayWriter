@@ -8,6 +8,7 @@ export const DraftDiagnosticsSchema = z.object({
   stages: z.array(z.object({stage: z.string(), words: z.number().int().min(0), parts: z.array(PartSchema)})),
   removed: z.array(z.string()),
   depthRepair: z.object({attempted: z.boolean(), addedWords: z.number().int().min(0), reason: z.string().optional()}).optional(),
+  topicReviewSkipped: z.string().optional(),
 });
 export type DraftDiagnostics = z.infer<typeof DraftDiagnosticsSchema>;
 

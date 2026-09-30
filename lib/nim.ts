@@ -93,7 +93,10 @@ function isRetryable(err: unknown): boolean {
   const name = (err as { constructor?: { name?: string } })?.constructor?.name;
   if (name === "APIConnectionError" || name === "APIConnectionTimeoutError") return true;
   const msg = err instanceof Error ? err.message : String(err ?? "");
-  return /connection error|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up|terminated|timed out|timeout|service temporarily overloaded|service unavailable/i.test(
+  // Upstream failures often arrive as bare messages without an HTTP status
+  // (mid-stream SSE errors, gateway HTML). Retry them all; only our own
+  // logic errors (output limits, empty responses, validation) fail fast.
+  return /connection error|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up|terminated|timed out|timeout|service temporarily overloaded|service unavailable|internal server error|bad gateway|gateway timeout|over capacity|upstream|try again/i.test(
     msg
   );
 }
@@ -219,12 +222,15 @@ function requestBody(params: ChatParams, extra?: { stream?: boolean }, provider:
  * bare provider message. Our own logic errors (output limits, empty
  * responses) pass through untouched. Status and headers are carried over so
  * rate-limit handling (retry-after, 429 hints) keeps working. */
+/** Our own logic errors: never provider failures, never tagged, never retried.
+ * Includes already-wrapped errors so a message is never tagged twice. */
+const LOGIC_ERRORS = /output limit|empty (response|stream)|stream terminated|did not finish|was cancelled|cancelled|aborted|no usable|empty essay|empty outline|duplicate footnote|no footnote|invalid fields|malformed data|unusable data|model service error|rate limit reached/i;
+
 export function tagProviderError(provider: "nvidia" | "openrouter", err: unknown): unknown {
-  const status = getStatus(err);
-  const name = (err as { constructor?: { name?: string } })?.constructor?.name;
-  if (status === undefined && name !== "APIConnectionError" && name !== "APIConnectionTimeoutError") return err;
-  const label = provider === "openrouter" ? "OpenRouter Luna" : "NVIDIA";
   const msg = err instanceof Error ? err.message : String(err ?? "request failed");
+  if (LOGIC_ERRORS.test(msg)) return err;
+  const status = getStatus(err);
+  const label = provider === "openrouter" ? "OpenRouter Luna" : "NVIDIA";
   const tagged = new Error(`${label} error${typeof status === "number" ? ` (${status})` : ""}: ${msg}`);
   (tagged as { status?: unknown }).status = status;
   (tagged as { headers?: unknown }).headers = (err as { headers?: unknown })?.headers;
