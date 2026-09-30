@@ -77,6 +77,27 @@ test('works cited collapses URL variants into one entry', () => {
   assert.match(draft.worksCited[0], /Rice Study/);
 });
 
+test('limitation sentences are detected for capping', () => {
+  const { isLimitationSentence } = require('../lib/validate.ts');
+  assert.equal(isLimitationSentence('The evidence does not establish long-term outcomes.[^1]'), true);
+  assert.equal(isLimitationSentence('The findings cannot settle questions of scale.'), true);
+  assert.equal(isLimitationSentence('Green spaces support health in dense cities.[^2]'), false);
+  assert.equal(isLimitationSentence('Cities should prioritize underserved areas.'), false);
+});
+
+test('piled limitations surface as a soft validator issue', () => {
+  const { validateDraft } = require('../lib/validate.ts');
+  const { DraftSchema } = require('../lib/essay-types.ts');
+  const para = 'Parks support daily activity for dense neighborhoods where many residents use them for exercise and social contact throughout the year in all seasons and weather conditions, making them central to neighborhood public life and community health every day. The evidence does not establish long-term outcomes for this intervention across seasons and populations. The supplied findings cannot settle questions of scale across regions and cities worldwide.';
+  const d = DraftSchema.parse({
+    title: 't', introduction: ['Intro here.'], sections: [{ heading: 'Benefits', paragraphs: [para] }],
+    conclusion: ['Done.'], footnotes: [], worksCited: [], evidence: [], coverage: [],
+  });
+  const codes = validateDraft(d).map(i => i.code);
+  assert.ok(codes.includes('LIMITATION_PILING'));
+  assert.ok(!codes.includes('SHORT_PARAGRAPH'));
+});
+
 test('coverage matches rhetorical moves by signal phrases', () => {
   const { buildCoverage } = require('../lib/validate.ts');
   const draft = {

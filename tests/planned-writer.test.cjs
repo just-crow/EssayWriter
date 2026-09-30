@@ -178,3 +178,31 @@ test('a body paragraph that masquerades as the conclusion is corrected before so
     assert.doesNotMatch(draft.sections[0].paragraphs[0],/^In conclusion/);
   }finally{nim.nimChatLong=original;}
 });
+
+test('piled limitation sentences are rewritten during drafting',async()=>{
+  const original=nim.nimChatLong;
+  let calls=0, sawLimitationFeedback=false;
+  const pad='The pattern held across all observed groups.';
+  const fill=(text,budget)=>{let out=text;while(out.split(/\s+/).filter(Boolean).length<Math.ceil(budget*0.55))out+=` ${pad}`;return out;};
+  const piled='The evidence does not establish long-term outcomes for this intervention. The supplied findings cannot settle questions of scale across regions.';
+  nim.nimChatLong=async params=>{
+    calls++;
+    const request=JSON.parse(params.user.split("\n")[0]);
+    const repairing=params.user.includes('evidence limits');
+    if(repairing) sawLimitationFeedback=true;
+    return JSON.stringify({title:'Measurements',paragraphs:request.tasks.map(task=>{
+      const base=`${overview}${task.assigned.map(fact=>`The recorded study examines cell measurements under its stated conditions.[^${fact.sourceId}]`).join(' ')}`;
+      const filled=fill(base,task.words);
+      return repairing?filled:`${filled} ${piled}`;
+    }),conclusion:request.conclusionWords?fill(ending,request.conclusionWords):''});
+  };
+  try{
+    const draft=await composePlannedDraft({...input,wordTarget:800,minimumSources:1,minimumFootnotes:1,extraInstructions:'Limitation cap test'},sources);
+    assert.ok(calls>=2);
+    assert.ok(sawLimitationFeedback,'the retry should carry the limitation feedback');
+    for(const paragraph of [...draft.introduction,...draft.sections.flatMap(s=>s.paragraphs)]){
+      const hits=paragraph.split(/(?<=[.!?])\s+/).filter(s=>/does not establish|cannot settle/i.test(s)).length;
+      assert.ok(hits<=1);
+    }
+  }finally{nim.nimChatLong=original;}
+});

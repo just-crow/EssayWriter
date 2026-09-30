@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import {
   assertGrounding,
   expandFootnoteUses,
+  isLimitationSentence,
   normQuote,
   pruneOrphanFootnotes,
   rebuildWorksCited,
@@ -199,7 +200,7 @@ export async function auditAndAlignGrounding(
           // Epistemic qualifications ("does not establish", "cannot settle")
           // limit claims rather than making new ones; forcing them into
           // "unsupported" punishes honesty and teaches the writer to overclaim.
-          const absenceStatement = /\b(?:does not|do not|did not|cannot be determined|cannot settle|no evidence|unclear|unknown|unproven|not established|not been established|remains? unknown|without proving|without establishing)\b/i.test(claim.sentence);
+          const absenceStatement = isLimitationSentence(claim.sentence);
           // Concrete numbers stay verifiable even inside a qualification:
           // "unclear whether the 42 percent rise persists" still needs its
           // statistic supported.

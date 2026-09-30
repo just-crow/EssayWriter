@@ -243,7 +243,7 @@ export async function POST(req: Request) {
             last = e;
             signal.throwIfAborted();
             const msg = e instanceof Error ? e.message : String(e ?? "");
-            if (!/omitted reserved works|Use only (the )?(planned )?source IDs|word synopsis|approximately .* words|cited 0 distinct works|below the requested|needs at least one citation|with \[\^sourceId\] markers|toward their word budgets|developed conclusion/i.test(msg)) throw e;
+            if (!/omitted reserved works|Use only (the )?(planned )?source IDs|word synopsis|approximately .* words|cited 0 distinct works|below the requested|needs at least one citation|with \[\^sourceId\] markers|toward their word budgets|developed conclusion|evidence limits/i.test(msg)) throw e;
             guided = `${failure}\n${msg}`.trim();
           }
         }

@@ -408,6 +408,16 @@ export function tidyVerifiedParagraph(text: string): string {
   return kept.join(" ").replace(/\s+([.,!?])/g, "$1").replace(/\s{2,}/g, " ").replace(/‑/g, "-").trim();
 }
 
+/** A sentence whose point is the absence or limits of evidence ("does not
+ * establish", "cannot settle", "no evidence", ...). Shared by the audit
+ * (protect these from deletion), the chunk writer check (cap them), and the
+ * validator (flag piling). Generic epistemic language, no topic content. */
+const ABSENCE_STATEMENT = /\b(?:does not|do not|did not|cannot be determined|cannot settle|no evidence|unclear|unknown|unproven|not established|not been established|remains? unknown|without proving|without establishing)\b/i;
+
+export function isLimitationSentence(sentence: string): boolean {
+  return ABSENCE_STATEMENT.test(sentence.replace(/\[\^\d+\]/g, ""));
+}
+
 /** Lexical entailment gate. Returns the claim's distinctive terms absent from
  * the supporting passage text (empty = covered). Short generic claims with
  * fewer than 4 distinctive terms are skipped as unjudgeable. Otherwise the
@@ -912,8 +922,23 @@ export function validateDraft(draft: EssayDraft): ValidationIssue[] {
       paragraph.replace(/\[\^\d+\]/g, "").split(/\s+/).filter(Boolean).length < 60).length;
   if (shortParagraphs) issues.push({
     code: "SHORT_PARAGRAPH",
-    detail: `${shortParagraphs} body paragraph${shortParagraphs === 1 ? " is" : "s are"} short after source verification. Expand using supported findings if more depth is needed.`,
+    detail: `${shortParagraphs} body paragraph${shortParagraphs === 1 ? "" : "s are"} short after source verification. Expand using supported findings if more depth is needed.`,
   });
+
+  // Piled evidence-limitation sentences read as a caveat list rather than an
+  // argument. Advisory only: the writer check above enforces this during
+  // drafting, but single-shot and repaired prose can still slip through.
+  for (const section of draft.sections) {
+    const piled = section.paragraphs.filter(
+      (paragraph) => splitSentences(paragraph).filter((s) => isLimitationSentence(s)).length > 1
+    ).length;
+    if (piled > 0) {
+      issues.push({
+        code: "LIMITATION_PILING",
+        detail: `${piled} paragraph${piled === 1 ? "" : "s"} in “${section.heading}” state${piled === 1 ? "s" : ""} evidence limits more than once. Fold extras into analysis.`,
+      });
+    }
+  }
 
   if (allText.includes("—")) {
     issues.push({
