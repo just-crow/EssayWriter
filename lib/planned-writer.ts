@@ -66,11 +66,18 @@ async function composeInChunks(
       timeoutMs: 90_000, tries: 1, parseTries: 2, retryTempDelta: 0, signal,
       validate: value => {
         value.paragraphs = value.paragraphs.map(normalizeCitationMarkers);
-        const invalid = value.paragraphs.flatMap((paragraph, paragraphIndex) =>
+        // Citations must come from the essay's evidence plan. Prefer each
+        // paragraph to use its own assigned findings (the prompt says so),
+        // but tolerate spillover to other planned IDs: the writer's relevance
+        // judgment sometimes beats TF-IDF assignment, and the source audit
+        // independently verifies every cited sentence against its page.
+        // Only invented IDs outside the plan fail the paragraph.
+        const planned = new Set(plan.requiredSourceIds);
+        const invalid = value.paragraphs.flatMap(paragraph =>
           [...paragraph.matchAll(/\[\^(\d+)\]/g)]
             .map(match => Number(match[1]))
-            .filter(id => !tasks[paragraphIndex].assigned.some(finding => finding.sourceId === id)));
-        if (invalid.length) throw new Error(`Use only the source IDs assigned to each paragraph, not ${invalid.join(", ")}.`);
+            .filter(id => !planned.has(id)));
+        if (invalid.length) throw new Error(`Use only the planned source IDs, not ${invalid.join(", ")}.`);
         // A paragraph with no markers at all would pass the check above
         // silently and fail the whole essay at the end. Demand the citation
         // here, where the retry still has the paragraph's assigned findings.
