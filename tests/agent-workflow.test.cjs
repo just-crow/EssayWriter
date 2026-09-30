@@ -111,6 +111,14 @@ test('routing labels never reach essay prose', () => {
   assert.equal(stripRoutingLabels('Paragraph 3: Green spaces help cities.[^1]'), 'Green spaces help cities.[^1]');
 });
 
+test('writer-stage voice repairs bare should-clauses', () => {
+  const { cleanEssayVoice } = require('../lib/source-writer.ts');
+  assert.equal(
+    cleanEssayVoice('The discussion examines should cities invest in parks.[^1]'),
+    'The discussion examines whether cities invest in parks.[^1]'
+  );
+});
+
 test('standalone author-date debris is removed, inline attribution kept', () => {
   const { isCitationDebris } = require('../lib/source-writer.ts');
   assert.equal(isCitationDebris('Mogo et al., 2019).[^4]'), true);

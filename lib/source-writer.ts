@@ -43,6 +43,8 @@ export function cleanEssayVoice(paragraph: string): string {
   ).join(" ");
   const cleaned = kept
     .replace(/\*([^*]+)\*/g, "$1").replace(/‑/g, "-")
+    // Recurring model grammar slip: verb + bare "should"-clause.
+    .replace(/\b(examines|discusses|explores|assesses) should\b/gi, "$1 whether")
     .replace(/\s*—\s*/g, ", ").replace(/;\s*/g, ". ")
     .replace(/(^|\s)>\s*(?=[A-Z])/g, "$1")
     .replace(/(\[\^\d+\]|[.!?])\s+\)\s+(?=[A-Z])/g, "$1 ")

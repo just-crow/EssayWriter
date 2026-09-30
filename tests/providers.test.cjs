@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { z } = require('zod');
-const { nimChat, nimChatLong, completeJson, nimClient, openRouterClient, NIM_MODEL, OPENROUTER_MODEL } = require('../lib/nim.ts');
+const { nimChat, nimChatLong, completeJson, nimClient, openRouterClient, tagProviderError, resetProviderCooldowns, NIM_MODEL, OPENROUTER_MODEL } = require('../lib/nim.ts');
 
 test('OpenRouter primary, transport fallback, cooldown and JSON repair', async () => {
   const oldRouterKey = process.env.OPENROUTER_API_KEY;
@@ -81,6 +81,85 @@ test('OpenRouter primary, transport fallback, cooldown and JSON repair', async (
     if (oldRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = oldRouterKey;
     if (oldNvidiaKey === undefined) delete process.env.NVIDIA_NIM_API_KEY; else process.env.NVIDIA_NIM_API_KEY = oldNvidiaKey;
   }
+});
+
+test('paid primary is retried before any fallback', async () => {
+  const oldRouterKey = process.env.OPENROUTER_API_KEY;
+  const oldNvidiaKey = process.env.NVIDIA_NIM_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-router-key';
+  process.env.NVIDIA_NIM_API_KEY = 'test-nvidia-key';
+  const router = openRouterClient().chat.completions;
+  const nvidia = nimClient().chat.completions;
+  const oldRouter = router.create, oldNvidia = nvidia.create;
+  const response = content => ({ choices: [{ finish_reason: 'stop', message: { content } }] });
+  const params = { system: 'Return JSON.', user: 'hi', tries: 2, thinking: false };
+  let routerCalls = 0, nvidiaCalls = 0;
+  resetProviderCooldowns();
+  try {
+    router.create = async () => { routerCalls++; if (routerCalls === 1) throw Object.assign(new Error('Service temporarily overloaded'), { status: 503 }); return response('{"ok":true}'); };
+    nvidia.create = async () => { nvidiaCalls++; return response('{"ok":true}'); };
+    assert.equal(await nimChat(params), '{"ok":true}');
+    assert.equal(routerCalls, 2);
+    assert.equal(nvidiaCalls, 0);
+  } finally {
+    router.create = oldRouter; nvidia.create = oldNvidia;
+    if (oldRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = oldRouterKey;
+    if (oldNvidiaKey === undefined) delete process.env.NVIDIA_NIM_API_KEY; else process.env.NVIDIA_NIM_API_KEY = oldNvidiaKey;
+  }
+});
+
+test('dual provider failure names both providers', async () => {
+  const oldRouterKey = process.env.OPENROUTER_API_KEY;
+  const oldNvidiaKey = process.env.NVIDIA_NIM_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-router-key';
+  process.env.NVIDIA_NIM_API_KEY = 'test-nvidia-key';
+  const router = openRouterClient().chat.completions;
+  const nvidia = nimClient().chat.completions;
+  const oldRouter = router.create, oldNvidia = nvidia.create;
+  const params = { system: 'Return JSON.', user: 'hi', tries: 1, thinking: false };
+  resetProviderCooldowns();
+  try {
+    router.create = async () => { throw Object.assign(new Error('Service temporarily overloaded'), { status: 503 }); };
+    nvidia.create = async () => { throw Object.assign(new Error('Service temporarily overloaded'), { status: 503 }); };
+    await assert.rejects(nimChat(params), /OpenRouter Luna error \(503\).*NVIDIA fallback failed: NVIDIA error \(503\)/);
+  } finally {
+    router.create = oldRouter; nvidia.create = oldNvidia;
+    if (oldRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = oldRouterKey;
+    if (oldNvidiaKey === undefined) delete process.env.NVIDIA_NIM_API_KEY; else process.env.NVIDIA_NIM_API_KEY = oldNvidiaKey;
+  }
+});
+
+test('rate-limit hint survives provider tagging', async () => {
+  const oldRouterKey = process.env.OPENROUTER_API_KEY;
+  const oldNvidiaKey = process.env.NVIDIA_NIM_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-router-key';
+  process.env.NVIDIA_NIM_API_KEY = 'test-nvidia-key';
+  const router = openRouterClient().chat.completions;
+  const nvidia = nimClient().chat.completions;
+  const oldRouter = router.create, oldNvidia = nvidia.create;
+  const params = { system: 'Return JSON.', user: 'hi', tries: 1, thinking: false };
+  resetProviderCooldowns();
+  try {
+    router.create = async () => { throw Object.assign(new Error('Rate limited'), { status: 429, headers: {} }); };
+    nvidia.create = async () => { throw Object.assign(new Error('Rate limited'), { status: 429, headers: {} }); };
+    await assert.rejects(
+      completeJson({ ...params, schema: z.object({ ok: z.boolean() }) }),
+      /Rate limit reached \(OpenRouter Luna error \(429\)/
+    );
+  } finally {
+    router.create = oldRouter; nvidia.create = oldNvidia;
+    if (oldRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = oldRouterKey;
+    if (oldNvidiaKey === undefined) delete process.env.NVIDIA_NIM_API_KEY; else process.env.NVIDIA_NIM_API_KEY = oldNvidiaKey;
+  }
+});
+
+test('provider tagging leaves logic errors untouched', () => {
+  const plain = new Error('Model returned an empty response.');
+  assert.equal(tagProviderError('openrouter', plain), plain);
+  const http = Object.assign(new Error('overloaded'), { status: 503 });
+  const tagged = tagProviderError('openrouter', http);
+  assert.match(tagged.message, /OpenRouter Luna error \(503\): overloaded/);
+  assert.equal(tagged.status, 503);
 });
 
 test('cancellation stops before any provider request or fallback', async () => {

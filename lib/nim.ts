@@ -22,6 +22,11 @@ let cachedRouter: OpenAI | null = null;
 let routerKey = "";
 let routerUnavailableUntil = 0;
 
+/** Test hook: clear the OpenRouter cooldown so tests control routing. */
+export function resetProviderCooldowns(): void {
+  routerUnavailableUntil = 0;
+}
+
 export function openRouterClient(): OpenAI {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY.");
@@ -209,39 +214,80 @@ function requestBody(params: ChatParams, extra?: { stream?: boolean }, provider:
   ) & ExtraBody;
 }
 
+/** Tag genuine provider transport/HTTP failures with the provider name so
+ * errors name the culprit ("OpenRouter Luna error (503): ...") instead of a
+ * bare provider message. Our own logic errors (output limits, empty
+ * responses) pass through untouched. Status and headers are carried over so
+ * rate-limit handling (retry-after, 429 hints) keeps working. */
+export function tagProviderError(provider: "nvidia" | "openrouter", err: unknown): unknown {
+  const status = getStatus(err);
+  const name = (err as { constructor?: { name?: string } })?.constructor?.name;
+  if (status === undefined && name !== "APIConnectionError" && name !== "APIConnectionTimeoutError") return err;
+  const label = provider === "openrouter" ? "OpenRouter Luna" : "NVIDIA";
+  const msg = err instanceof Error ? err.message : String(err ?? "request failed");
+  const tagged = new Error(`${label} error${typeof status === "number" ? ` (${status})` : ""}: ${msg}`);
+  (tagged as { status?: unknown }).status = status;
+  (tagged as { headers?: unknown }).headers = (err as { headers?: unknown })?.headers;
+  return tagged;
+}
+
+function describeFailure(err: unknown): string {
+  return err instanceof Error ? err.message : String(err ?? "request failed");
+}
+
 async function withProviderFallback(params: ChatParams, run: (client: OpenAI, provider: "nvidia" | "openrouter") => Promise<string>) {
   params.signal?.throwIfAborted();
-  let offset = 0;
+  let primaryError: unknown = null;
+  let primaryAttempts = 0;
   if (params.provider !== "nvidia" && process.env.OPENROUTER_API_KEY && Date.now() >= routerUnavailableUntil) {
-    params.onAttempt?.(1);
     params.onProvider?.("openrouter");
-    try { return await run(openRouterClient(), "openrouter"); }
-    catch (err) {
+    try {
+      // The paid primary gets its own retries (honoring retry-after) before
+      // any fallback: a transient Luna 503 must not burn NVIDIA quota or
+      // surface as a fallback error. Non-retryable errors fall through fast.
+      return await withRetry(
+        () => { params.signal?.throwIfAborted(); return run(openRouterClient(), "openrouter"); },
+        params.tries ?? 2,
+        (n) => { primaryAttempts = Math.max(primaryAttempts, n); params.onAttempt?.(n); }
+      );
+    } catch (err) {
       params.signal?.throwIfAborted();
       if (params.signal?.aborted) throw err;
-      // Discard any partial output. Use NVIDIA immediately, and avoid
-      // repeatedly probing an unavailable provider during the same essay.
+      // Discard any partial output, and avoid repeatedly probing an
+      // unavailable provider during the same essay.
+      primaryError = err;
       routerUnavailableUntil = Date.now() + 60_000;
-      offset = 1;
     }
   }
   params.onProvider?.("nvidia");
-  return withRetry(() => { params.signal?.throwIfAborted(); return run(nimClient(), "nvidia"); }, params.tries ?? 3, n => params.onAttempt?.(offset + n));
+  try {
+    return await withRetry(() => { params.signal?.throwIfAborted(); return run(nimClient(), "nvidia"); }, params.tries ?? 3, n => params.onAttempt?.(primaryAttempts + n));
+  } catch (err) {
+    // Never swallow the primary failure: when both providers fail, the user
+    // must see both (a paid-Luna outage currently surfaces as a bare
+    // NVIDIA error, sending debugging in the wrong direction).
+    if (primaryError) throw new Error(`${describeFailure(primaryError)}; NVIDIA fallback failed: ${describeFailure(err)}`);
+    throw err;
+  }
 }
 
 export async function nimChat(params: ChatParams): Promise<string> {
   return withProviderFallback(params,
     async (client, provider) => {
-      const completion = await client.chat.completions.create(
-        requestBody(params, undefined, provider),
-        { timeout: params.timeoutMs ?? NIM_TIMEOUT_MS, signal: params.signal }
-      );
-      const choice = completion.choices?.[0];
-      if (choice?.finish_reason === "length") {
-        throw new Error("The model reached its output limit before finishing the JSON. Use a shorter word target.");
+      try {
+        const completion = await client.chat.completions.create(
+          requestBody(params, undefined, provider),
+          { timeout: params.timeoutMs ?? NIM_TIMEOUT_MS, signal: params.signal }
+        );
+        const choice = completion.choices?.[0];
+        if (choice?.finish_reason === "length") {
+          throw new Error("The model reached its output limit before finishing the JSON. Use a shorter word target.");
+        }
+        if (!choice?.message?.content) throw new Error("Model returned an empty response.");
+        return choice.message.content;
+      } catch (err) {
+        throw tagProviderError(provider, err);
       }
-      if (!choice?.message?.content) throw new Error("Model returned an empty response.");
-      return choice.message.content;
     }
   );
 }
@@ -278,7 +324,7 @@ export async function nimChatLong(params: ChatParams): Promise<string> {
     } catch (error) {
       params.signal?.throwIfAborted();
       if (deadline.aborted) throw new Error(`Model stream timed out after ${Math.ceil(limit / 1000)} seconds.`);
-      throw error;
+      throw tagProviderError(provider, error);
     }
   });
 }
