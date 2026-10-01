@@ -30,6 +30,14 @@ Give each body paragraph one distinct job in the argument. State a claim relevan
 In the conclusion, answer the question more precisely by weighing or qualifying the established points. State relative importance or conditions only if the body supports them. Introduce no new evidence, factual claims, recommendations, or citations. Do not print these planning steps or labels in the essay.
 `.trim();
 
+/** Body sections scale with essay length (about one per 250 words) so a
+ * long target gets more sections rather than bloated ones. Bounded to keep
+ * short essays focused and long ones manageable. */
+export function suggestedSectionCount(wordTarget: number): number {
+  if (!Number.isFinite(wordTarget) || wordTarget <= 0) return 3;
+  return Math.max(2, Math.min(6, Math.round(wordTarget / 250)));
+}
+
 export const STRUCTURE_SYSTEM = `
 ${GLOBAL_STYLE_RULES}
 
@@ -45,7 +53,7 @@ Cover every instruction-sheet requirement, every criterion and strand. Map each 
 CHECKLIST: list ONLY requirements from the user's instruction sheet, topic, and word target. Never list internal writing rules (style bans, citation mechanics, paragraph shapes, conclusion rules) as checklist items.
 THESIS: answer the actual question with a defensible position plus the main line of reasoning, not a generic "this essay will discuss" summary. For evaluate/assess questions, state the qualified judgment up front.
 HEADINGS: specific and distinct, never generic ("Core Principles", "Conclusion", "Introduction"). Each heading must promise a different job. Only name a person, theory, or case in a heading if a paragraph point beneath it investigates that exact name.
-SHAPE: break every section into several paragraph-level bullet points (usually 2 to 4), each with its own point, criterion, and strand. A section with only a single line is a defect. Points are distinct investigative questions, not restatements of each other.
+SHAPE: scale the number of body sections to the word target at about one section per 250 words (the user message states the exact count for this essay), unless the instruction sheet fixes the structure. Break every section into several paragraph-level bullet points (usually 2 to 4), each with its own point, criterion, and strand. A section with only a single line is a defect. Each section should carry roughly 200 to 300 words of the final essay: prefer more sections over bloated ones as the target grows. Points are distinct investigative questions, not restatements of each other.
 The app provides one introduction and one conclusion separately. Put only substantive body sections in "sections"; do not add sections headed Introduction or Conclusion. Describe any introductory framing or concluding synthesis in the thesis or checklist instead.
 If no instruction sheet or context is given, proceed with the topic alone using standard academic essay conventions and list the assumed requirements in the checklist.
 `.trim();
@@ -104,7 +112,7 @@ export function structureUserPrompt(input: {
   extraInstructions: string;
   wordTarget: number;
 }): string {
-  return `Topic: ${input.topic}\nWord target: ${input.wordTarget}\nInstruction sheet / criteria:\n${input.instructionText}\nExtra user instructions:\n${input.extraInstructions}\n\nBuild the structure JSON now.`;
+  return `Topic: ${input.topic}\nWord target: ${input.wordTarget}\nInstruction sheet / criteria:\n${input.instructionText}\nExtra user instructions: ${input.extraInstructions}\nAim for about ${suggestedSectionCount(input.wordTarget)} substantive body sections (fewer only if the instruction sheet fixes the structure).\n\nBuild the structure JSON now.`;
 }
 
 export function draftUserPrompt(input: {

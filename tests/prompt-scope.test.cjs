@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { STRUCTURE_SYSTEM, DRAFT_SYSTEM, REFINE_SYSTEM, structureUserPrompt, draftUserPrompt } = require('../lib/prompts.ts');
+const { STRUCTURE_SYSTEM, DRAFT_SYSTEM, REFINE_SYSTEM, structureUserPrompt, draftUserPrompt, suggestedSectionCount } = require('../lib/prompts.ts');
 
 test('shared essay prompts do not prescribe a subject or learning-platform application', () => {
   for (const prompt of [STRUCTURE_SYSTEM, DRAFT_SYSTEM, REFINE_SYSTEM]) {
@@ -12,4 +12,15 @@ test('shared essay prompts do not prescribe a subject or learning-platform appli
     assert.ok(draftUserPrompt(input).startsWith(`Topic: ${topic}\n`));
     assert.doesNotMatch(draftUserPrompt(input), /platform|interactive learning|curriculum|gamification/i);
   }
+});
+
+test('outline section count scales with the word target', () => {
+  assert.equal(suggestedSectionCount(400), 2);
+  assert.equal(suggestedSectionCount(800), 3);
+  assert.equal(suggestedSectionCount(1000), 4);
+  assert.equal(suggestedSectionCount(1200), 5);
+  assert.equal(suggestedSectionCount(3000), 6);
+  const input = { topic: 'T', instructionText: '', extraInstructions: '', wordTarget: 1200, structureJson: '{}', sourcesJson: '[]', evidenceSpine: '[]' };
+  assert.match(structureUserPrompt(input), /about 5 substantive body sections/);
+  assert.match(STRUCTURE_SYSTEM, /one section per 250 words/);
 });
