@@ -152,11 +152,12 @@ test('pipeline stages report which providers served them', async () => {
   const seen = [];
   nim.nimChatLong = async params => {
     params.onProvider?.('openrouter');
-    return JSON.stringify({ decisions: [{ paragraph: 0, sentenceIndex: 0, relevant: true, reason: 'on point' }] });
+    const batch = JSON.parse(params.user.split('SENTENCES TO CHECK: ')[1].split('\nReturn ')[0]);
+    return JSON.stringify({ decisions: batch.flatMap((item) => item.sentences.map((s) => ({ paragraph: item.paragraph, sentenceIndex: s.sentenceIndex, relevant: true, reason: 'on point' }))) });
   };
   try {
     const draft = {
-      title: 't', introduction: ['Rivers shape valleys.'], sections: [],
+      title: 't', introduction: ['Rivers shape valleys.'], sections: [{ heading: 'Flow', paragraphs: ['Rivers flow onward.'] }],
       conclusion: ['c'], footnotes: [], worksCited: [], evidence: [], coverage: [],
     };
     await removeOffTopicProse(draft, 'Rivers', undefined, '{}', p => seen.push(p));

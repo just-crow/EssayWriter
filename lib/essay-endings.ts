@@ -1,5 +1,15 @@
 import type { EssayDraft } from "./essay-types";
 
+/** Which of the two ends vanished under source checks (blank after audit).
+ * The route treats a missing end as a retryable failure rather than
+ * silently delivering a structurally broken essay. */
+export function missingEnds(draft: EssayDraft): Array<"introduction" | "conclusion"> {
+  const missing: Array<"introduction" | "conclusion"> = [];
+  if (!draft.introduction.some((paragraph) => paragraph.trim())) missing.push("introduction");
+  if (!draft.conclusion.some((paragraph) => paragraph.trim())) missing.push("conclusion");
+  return missing;
+}
+
 /** An audit may remove an unsupported opening thesis or closing claim in its
  * entirety. Keep the verified body, and supply only nonfactual framing. */
 export function ensureEssayEnds(draft: EssayDraft, topic: string): void {

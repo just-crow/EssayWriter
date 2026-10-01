@@ -29,3 +29,28 @@ test('removes a well-cited but unrelated example while preserving citation scope
     assert.deepEqual(draft.conclusion,['The established crop findings warrant careful review.']);
   }finally{nim.nimChatLong=original;}
 });
+
+test('the introduction is never reviewed or removed for topicality',async()=>{
+  const draft={title:'Crop essay',introduction:[' framing statement about crops.[^1]'],
+    sections:[{heading:'Adoption of Crops',paragraphs:['Public acceptance affects adoption.[^2]']}],
+    conclusion:['Closing.'],footnotes:[],evidence:[],worksCited:[],coverage:[]};
+  const original=nim.nimChatLong;
+  let minParagraph = Infinity;
+  nim.nimChatLong=async params=>{
+    const batch=JSON.parse(params.user.split('SENTENCES TO CHECK: ')[1].split('\nReturn ')[0]);
+    for (const item of batch) minParagraph = Math.min(minParagraph, item.paragraph);
+    return JSON.stringify({decisions:batch.flatMap(item=>item.sentences.map(sentence=>({
+      paragraph:item.paragraph,sentenceIndex:sentence.sentenceIndex,
+      relevant:false,reason:'Off topic.'
+    })))});
+  };
+  try{
+    // Even with the model flagging everything, the framing intro survives;
+    // only body sentences go, keeping global paragraph numbering intact.
+    const removed=await removeOffTopicProse(draft,'Crop improvement');
+    assert.ok(minParagraph >= 1, 'introduction never reaches the reviewer');
+    assert.equal(removed.length,1);
+    assert.match(removed[0],/^paragraph 1:/);
+    assert.deepEqual(draft.introduction,['framing statement about crops.[^1]']);
+  }finally{nim.nimChatLong=original;}
+});

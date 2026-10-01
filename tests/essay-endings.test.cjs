@@ -1,5 +1,14 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
+const {missingEnds}=require('../lib/essay-endings.ts');
+
+test('blank ends are reported for retry instead of silent delivery',()=>{
+  const full={introduction:['Opening.'],sections:[],conclusion:['Closing.']};
+  assert.deepEqual(missingEnds(full),[]);
+  assert.deepEqual(missingEnds({...full,introduction:['   ']}),['introduction']);
+  assert.deepEqual(missingEnds({...full,conclusion:[]}),['conclusion']);
+  assert.deepEqual(missingEnds({introduction:[''],sections:[],conclusion:['  ']}),['introduction','conclusion']);
+});
 const {ensureEssayEnds}=require('../lib/essay-endings.ts');
 
 test('an audit can empty an opening without discarding a verified essay',()=>{

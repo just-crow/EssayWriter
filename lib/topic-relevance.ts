@@ -20,18 +20,32 @@ export async function removeOffTopicProse(draft: EssayDraft, topic: string, sign
       heading: section.heading || "", points: (section.paragraphs || []).map(point => point.point || "").filter(Boolean),
     })) : [];
   } catch { /* The heading and topic still define the scope. */ }
-  const paragraphs = [
-    ...draft.introduction.map(text => ({heading: "Introduction", text})),
-    ...draft.sections.flatMap(section => section.paragraphs.map(text => ({heading: section.heading, text}))),
-  ];
-  const items = paragraphs.map((item, paragraph) => ({
-    paragraph, heading: item.heading,
-    sentences: splitSentences(item.text).map((sentence, sentenceIndex) => ({
-      sentenceIndex, text: sentence.replace(/\[\^\d+\]/g, "").trim(),
-    })),
-  }));
+  // The introduction frames the essay rather than developing section points,
+  // so topicality review skips it: a relevance model cannot tell framing
+  // from drift, and deleting the whole opening reads as a skipped
+  // introduction. Factual claims there still face source verification.
+  // Paragraph numbers stay global (introduction paragraphs first) so removed
+  // reports align with the source audit's numbering.
+  const paragraphs: Array<{heading: string; text: string; paragraph: number}> = [];
+  draft.introduction.forEach((text) => paragraphs.push({heading: "Introduction", text, paragraph: paragraphs.length}));
+  for (const section of draft.sections) {
+    for (const text of section.paragraphs) {
+      paragraphs.push({heading: section.heading, text, paragraph: paragraphs.length});
+    }
+  }
+  const items = paragraphs
+    .filter((item, index) => index >= draft.introduction.length)
+    .map((item) => ({
+      paragraph: item.paragraph, heading: item.heading,
+      sentences: splitSentences(item.text).map((sentence, sentenceIndex) => ({
+        sentenceIndex, text: sentence.replace(/\[\^\d+\]/g, "").trim(),
+      })),
+    }));
   // Small, independent checks keep a provider from mistaking the complete
   // essay embedded in a long request for a request to rewrite the essay.
+  // Items hold global paragraph numbers (introduction paragraphs first),
+  // so look them up by number, never by position.
+  const byParagraph = new Map(items.map((item) => [item.paragraph, item]));
   const batches = Array.from({length: Math.ceil(items.length / 2)}, (_, index) => items.slice(index * 2, index * 2 + 2));
   const offTopic: Array<{paragraph: number; sentenceIndex: number; reason: string}> = [];
   for (let index = 0; index < batches.length; index += 2) {
@@ -49,7 +63,7 @@ export async function removeOffTopicProse(draft: EssayDraft, topic: string, sign
           if (returned.length !== expected.length || new Set(returned).size !== expected.length || expected.some(key => !returned.includes(key))) {
             throw new Error("Classify every supplied sentence exactly once by its paragraph and sentence index.");
           }
-          for (const claim of value.decisions) if (!allowed.has(claim.paragraph) || !items[claim.paragraph]?.sentences[claim.sentenceIndex]) {
+          for (const claim of value.decisions) if (!allowed.has(claim.paragraph) || !byParagraph.get(claim.paragraph)?.sentences[claim.sentenceIndex]) {
             throw new Error("The relevance review used a nonexistent paragraph or sentence index.");
           }
         },
@@ -57,11 +71,13 @@ export async function removeOffTopicProse(draft: EssayDraft, topic: string, sign
     }));
     // User-supplied wording is never off-topic: the author placed it.
     const preserved = new Set((preserveTexts ?? []).map((t) => normQuote(t)));
-    const isPreserved = (paragraph: number, sentenceIndex: number) =>
-      preserved.has(normQuote(items[paragraph].sentences[sentenceIndex].text.replace(/\[\^\d+\]/g, "").trim()));
+    const isPreserved = (paragraph: number, sentenceIndex: number) => {
+      const text = byParagraph.get(paragraph)?.sentences[sentenceIndex]?.text ?? "";
+      return preserved.has(normQuote(text.replace(/\[\^\d+\]/g, "").trim()));
+    };
     offTopic.push(...results.flatMap(result => result.decisions.filter(item => !item.relevant && !isPreserved(item.paragraph, item.sentenceIndex))));
   }
-  const removed = offTopic.map(item => `paragraph ${item.paragraph}: off topic — “${items[item.paragraph].sentences[item.sentenceIndex].text}” (${item.reason})`);
+  const removed = offTopic.map(item => `paragraph ${item.paragraph}: off topic — “${byParagraph.get(item.paragraph)?.sentences[item.sentenceIndex]?.text ?? ""}” (${item.reason})`);
   if (!removed.length) return removed;
   const excluded = new Set(offTopic.map(item => `${item.paragraph}:${item.sentenceIndex}`));
   const rewritten = paragraphs.map((item, paragraph) => citationScopes(item.text)

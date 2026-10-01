@@ -25,7 +25,7 @@ import { workIdentity } from "@/lib/work-identity";
 import { repairCitationMinimums } from "@/lib/citation-repair";
 import { repairParagraphDepth } from "@/lib/paragraph-depth-repair";
 import { plannedEvidence, snapshotDraft, type DraftDiagnostics } from "@/lib/draft-diagnostics";
-import { ensureEssayEnds } from "@/lib/essay-endings";
+import { ensureEssayEnds, missingEnds } from "@/lib/essay-endings";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -168,6 +168,12 @@ export async function POST(req: Request) {
           const removedClaims = [...offTopic, ...audit.removed];
           diagnostics.removed = removedClaims.slice(0, 40);
           diagnostics.stages.push(snapshotDraft(d, "Source verification"));
+          // A vanished end is a retryable failure, never a silent skip: the
+          // recomposition round reserves fresh evidence for the rewrite.
+          const gone = missingEnds(d);
+          if (gone.length > 0) {
+            throw new Error(`The ${gone.join(" and ")} ${gone.length > 1 ? "are" : "is"} empty after source checks (every sentence was removed). Rewrite ${gone.length > 1 ? "them" : "it"} from the approved outline using only claims directly supported by the supplied page text.${removedClaims.length > 0 ? ` Removed:\n${removedClaims.slice(0, 8).join("\n")}` : ""}`);
+          }
           ensureEssayEnds(d, body.topic);
           const removed = removedClaims.length > 0
             ? ` The review removed these off-topic or unsupported claims; replace them only with relevant claims directly supported by the supplied page text:\n${removedClaims.slice(0, 8).join("\n")}`
@@ -278,7 +284,7 @@ export async function POST(req: Request) {
             last = e;
             signal.throwIfAborted();
             const msg = e instanceof Error ? e.message : String(e ?? "");
-            if (!/omitted reserved works|Use only (the )?(planned )?source IDs|word synopsis|approximately .* words|cited 0 distinct works|below the requested|needs at least one citation|with \[\^sourceId\] markers|toward their word budgets|developed conclusion|evidence limits|review removed|audit removed|No factual claims|no usable in-text citations|directly supported findings|outside the .*word target tolerance|developed section paragraphs|no more than \d+ developed/i.test(msg)) throw e;
+            if (!/omitted reserved works|Use only (the )?(planned )?source IDs|word synopsis|approximately .* words|cited 0 distinct works|below the requested|needs at least one citation|with \[\^sourceId\] markers|toward their word budgets|developed conclusion|evidence limits|review removed|audit removed|No factual claims|no usable in-text citations|directly supported findings|outside the .*word target tolerance|developed section paragraphs|no more than \d+ developed|empty after source checks/i.test(msg)) throw e;
             const assignedTexts = plan.tasks.flatMap((task) => task.assigned.map((finding) => finding.text));
             for (const key of excludedFindingsFor(diagnostics.removed, assignedTexts)) {
               if (!excluded.includes(key)) excluded.push(key);
