@@ -273,6 +273,29 @@ test('basic knowledge and warranted reasoning survive uncited while research and
   }finally{nim.nimChatLong=original;}
 });
 
+test('questions and essay framing are never forced into unsupported',async()=>{
+  const url='https://example.org/question-framing';
+  const content='The trial recorded reduced water use in experimental plants under dry conditions.';
+  const sources=[{url,content,title:'Trial',author:'',publisher:'',year:'',accessed:''}];
+  const question='What risks to residents should planners weigh first?';
+  const framing='This essay asks whether a 20 percent gain is realistic.';
+  const fact='The trial recorded reduced water use in experimental plants.[^1]';
+  const draft={title:'Questions',introduction:[`${question} ${framing}`],sections:[{heading:'Assessment',paragraphs:[fact]}],conclusion:[],footnotes:[{id:1,url}],evidence:[],worksCited:[],coverage:[]};
+  const original=nim.nimChatLong;
+  nim.nimChatLong=async()=>JSON.stringify({claims:[
+    {paragraph:0,sentenceIndex:0,status:'nonfactual',reason:'Question asserts nothing.'},
+    {paragraph:0,sentenceIndex:1,status:'nonfactual',reason:'Framing states no fact.'},
+    {paragraph:1,sentenceIndex:0,status:'supported',supportingSourceIndex:0,supportingPassageIndexes:[0],reason:'Direct finding.'},
+  ]});
+  try{
+    const audit=await auditAndAlignGrounding(draft,sources,{batchSize:4,fast:true});
+    assert.deepEqual(audit.removed,[]);
+    assert.ok(draft.introduction[0].includes(question));
+    assert.ok(draft.introduction[0].includes(framing));
+    assert.ok(draft.sections[0].paragraphs[0].includes(fact));
+  }finally{nim.nimChatLong=original;}
+});
+
 test('negative no-source sentinel on nonfactual audit claims does not rewrite the essay',async()=>{
   const url='https://example.org/no-source-sentinel';
   const content='The trial recorded reduced water use in experimental plants under dry conditions.';
