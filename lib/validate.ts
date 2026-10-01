@@ -421,6 +421,29 @@ export function isLimitationSentence(sentence: string): boolean {
   return ABSENCE_STATEMENT.test(sentence.replace(/\[\^\d+\]/g, ""));
 }
 
+/** Generic rhetorical vocabulary for evaluative work (limitations,
+ * trade-offs, counterarguments, risks). Text that is itself about limits
+ * may state several limitation sentences without piling; anywhere else more
+ * than two reads as a caveat list. Inflected forms match via stem plus
+ * standard suffixes. Used by the writer check (with the task point) and the
+ * validator (with the section heading). */
+const EVALUATIVE_LONG_BASE = ["counter", "challeng", "evaluat", "drawback", "concern", "assess", "critic"];
+const EVALUATIVE_SHORT_BASE = ["limit", "risk", "trade", "cost", "weight", "weigh", "harm", "bias", "gap"];
+const EVALUATIVE_SUFFIX = /^(s|es|ed|ing|ly|ness|ment|ations?|itions?|ions?|ful|al|y|e)$/;
+
+function isEvaluativeWord(word: string): boolean {
+  const w = word.toLowerCase();
+  if (EVALUATIVE_LONG_BASE.some((base) => w.startsWith(base))) return true;
+  return EVALUATIVE_SHORT_BASE.some(
+    (base) => w === base || (w.startsWith(base) && EVALUATIVE_SUFFIX.test(w.slice(base.length)))
+  );
+}
+
+export function limitationAllowance(point: string, heading: string): number {
+  const words = `${heading} ${point}`.toLowerCase().match(/[a-z]{3,}/g) ?? [];
+  return words.some(isEvaluativeWord) ? 3 : 2;
+}
+
 /** Lexical entailment gate. Returns the claim's distinctive terms absent from
  * the supporting passage text (empty = covered). Short generic claims with
  * fewer than 4 distinctive terms are skipped as unjudgeable. Otherwise the
@@ -929,11 +952,12 @@ export function validateDraft(draft: EssayDraft): ValidationIssue[] {
   });
 
   // Piled evidence-limitation sentences read as a caveat list rather than an
-  // argument. Advisory only: the writer check above enforces this during
-  // drafting, but single-shot and repaired prose can still slip through.
+  // argument. Advisory only, using the same allowance as the writer check
+  // (evaluative sections genuinely need more room than others).
   for (const section of draft.sections) {
+    const allow = limitationAllowance("", section.heading);
     const piled = section.paragraphs.filter(
-      (paragraph) => splitSentences(paragraph).filter((s) => isLimitationSentence(s)).length > 1
+      (paragraph) => splitSentences(paragraph).filter((s) => isLimitationSentence(s)).length > allow
     ).length;
     if (piled > 0) {
       issues.push({

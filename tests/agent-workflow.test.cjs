@@ -92,7 +92,7 @@ test('limitation sentences are detected for capping', () => {
 test('piled limitations surface as a soft validator issue', () => {
   const { validateDraft } = require('../lib/validate.ts');
   const { DraftSchema } = require('../lib/essay-types.ts');
-  const para = 'Parks support daily activity for dense neighborhoods where many residents use them for exercise and social contact throughout the year in all seasons and weather conditions, making them central to neighborhood public life and community health every day. The evidence does not establish long-term outcomes for this intervention across seasons and populations. The supplied findings cannot settle questions of scale across regions and cities worldwide.';
+  const para = 'Parks support daily activity for dense neighborhoods where many residents use them for exercise and social contact throughout the year in all seasons and weather conditions, making them central to neighborhood public life and community health every day. The evidence does not establish long-term outcomes for this intervention across seasons and populations. The supplied findings cannot settle questions of scale across regions and cities worldwide. The scale of these effects remains unknown across settings and time periods.';
   const d = DraftSchema.parse({
     title: 't', introduction: ['Intro here.'], sections: [{ heading: 'Benefits', paragraphs: [para] }],
     conclusion: ['Done.'], footnotes: [], worksCited: [], evidence: [], coverage: [],

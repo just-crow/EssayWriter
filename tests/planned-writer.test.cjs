@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const nim = require('../lib/nim.ts');
 const { buildWritingPlan, composePlannedDraft, removeRepeatedProse, excludedFindingsFor } = require('../lib/planned-writer.ts');
+const { limitationAllowance } = require('../lib/validate.ts');
 const input = {topic:'Cell measurements', instructionText:'Evaluate the recorded measurements.', extraInstructions:'', wordTarget:600, minimumSources:10, minimumFootnotes:1, structureJson:JSON.stringify({thesis:'Assess the measurements.', sections:[{heading:'Cell measurements', paragraphs:[{point:'Evaluate the cell measurements under observed conditions.'}]}]})};
 const sources = Array.from({length:10}, (_,i) => ({id:String(i+1), title:`Measurement study ${i+1}`, url:`https://example.org/study-${i+1}`, content:`Cell measurements in study ${i+1} recorded distinct observations under the experimental conditions described in the report.`}));
 const overview = 'The recorded observations provide the basis for evaluating these measurements within the experimental conditions described. '.repeat(5);
@@ -194,12 +195,19 @@ test('removed claims map back to the planned findings that fed them', () => {
   assert.deepEqual(excludedFindingsFor(['no quoted sentence here'], assigned), []);
 });
 
+test('evaluative tasks allow more limitation sentences than other paragraphs', () => {
+  assert.equal(limitationAllowance('Evaluate the limitations of green investment.', 'Costs'), 3);
+  assert.equal(limitationAllowance('Assess the counterargument on funding.', 'Trade-offs'), 3);
+  assert.equal(limitationAllowance('Describe observed cell measurements.', 'Results'), 2);
+  assert.equal(limitationAllowance('Summarize the findings.', 'Introduction'), 2);
+});
+
 test('piled limitation sentences are rewritten during drafting',async()=>{
   const original=nim.nimChatLong;
   let calls=0, sawLimitationFeedback=false;
   const pad='The pattern held across all observed groups.';
   const fill=(text,budget)=>{let out=text;while(out.split(/\s+/).filter(Boolean).length<Math.ceil(budget*0.55))out+=` ${pad}`;return out;};
-  const piled='The evidence does not establish long-term outcomes for this intervention. The supplied findings cannot settle questions of scale across regions.';
+  const piled='The evidence does not establish long-term outcomes for this intervention. The supplied findings cannot settle questions of scale across regions. The scale of these effects remains unknown across settings. No evidence addresses the durability of these effects over time.';
   nim.nimChatLong=async params=>{
     calls++;
     const request=JSON.parse(params.user.split("\n")[0]);

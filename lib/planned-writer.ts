@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { completeJson, nimChatLong, type ModelProvider } from "./nim";
 import { planParagraphs, sourceFindingSentences } from "./paragraph-plan";
 import { cleanEssayVoice } from "./source-writer";
-import { normQuote, consolidateSectionParagraphs, isLimitationSentence, splitSentences } from "./validate";
+import { normQuote, consolidateSectionParagraphs, isLimitationSentence, limitationAllowance, splitSentences } from "./validate";
 import { citationScopes } from "./citation-runs";
 import { workIdentity } from "./work-identity";
 import { SOURCE_BASED_ARGUMENT_GUIDANCE } from "./prompts";
@@ -80,7 +80,7 @@ async function composeInChunks(
     signal?.throwIfAborted();
     const last = index === groups.length - 1;
     const result = await completeJson({
-      system: `Continue a source-based academic essay. ${SOURCE_BASED_ARGUMENT_GUIDANCE} Return JSON with title, paragraphs, and conclusion. Write exactly one finished prose paragraph for each supplied task in order, close to its word budget. Do not include plans, word-count notes, source titles, source excerpts, lists, or explanations of what you will write. Paraphrase each finding and use only that task's assigned findings for specialised facts. Keep each paragraph under its own task's section; never move material into another section and never emit routing labels, task indexes, or staging directions. State magnitudes, extents, and comparisons only with quantities stated in the passage; drop bare intensifiers (significantly, dramatically, substantially, markedly, clearly, robust) unless the passage uses them. Cite each factual run with [^sourceId], closing one source's run before using another source. A closing marker may cover consecutive sentences supported by the same work. Every body paragraph and the introduction MUST contain at least one [^sourceId] citation to its own assigned findings, even a primarily evaluative paragraph: ground it in the assigned findings before developing evaluation from them. A body or introduction paragraph without any citation marker is a defect. When paraphrasing, retain the passage's key terms verbatim (group names, measures, outcomes, qualifiers) instead of substituting synonyms, so each cited sentence shares its source's vocabulary and stays traceable to its passage. The earlier paragraphs are context: advance their argument without repeating their findings, examples, or wording. Keep claims qualified to the supplied evidence. Explain significance and limitations warranted by that evidence, without inventing facts. Allow at most one standalone evidence-limitation sentence per paragraph; fold further qualifications into analysis. No em dashes or semicolons. ${last ? "Write a citation-free conclusion that synthesizes only the completed essay, with no new information." : "Set conclusion to an empty string; the final group will write it."}`,
+      system: `Continue a source-based academic essay. ${SOURCE_BASED_ARGUMENT_GUIDANCE} Return JSON with title, paragraphs, and conclusion. Write exactly one finished prose paragraph for each supplied task in order, close to its word budget. Do not include plans, word-count notes, source titles, source excerpts, lists, or explanations of what you will write. Paraphrase each finding and use only that task's assigned findings for specialised facts. Keep each paragraph under its own task's section; never move material into another section and never emit routing labels, task indexes, or staging directions. State magnitudes, extents, and comparisons only with quantities stated in the passage; drop bare intensifiers (significantly, dramatically, substantially, markedly, clearly, robust) unless the passage uses them. Cite each factual run with [^sourceId], closing one source's run before using another source. A closing marker may cover consecutive sentences supported by the same work. Every body paragraph and the introduction MUST contain at least one [^sourceId] citation to its own assigned findings, even a primarily evaluative paragraph: ground it in the assigned findings before developing evaluation from them. A body or introduction paragraph without any citation marker is a defect. When paraphrasing, retain the passage's key terms verbatim (group names, measures, outcomes, qualifiers) instead of substituting synonyms, so each cited sentence shares its source's vocabulary and stays traceable to its passage. The earlier paragraphs are context: advance their argument without repeating their findings, examples, or wording. Keep claims qualified to the supplied evidence. Explain significance and limitations warranted by that evidence, without inventing facts. Allow at most two standalone evidence-limitation sentences per paragraph (three where the task evaluates limitations or counterarguments); fold further qualifications into analysis. No em dashes or semicolons. ${last ? "Write a citation-free conclusion that synthesizes only the completed essay, with no new information." : "Set conclusion to an empty string; the final group will write it."}`,
       user: JSON.stringify({ topic: input.topic, instructions: input.instructionText, extraInstructions: input.extraInstructions,
         thesis: plan.thesis, feedback, previousParagraphs: paragraphs,
         tasks: tasks.map(task => writerTask(task, plan.headings)),
@@ -113,14 +113,17 @@ async function composeInChunks(
           .filter(({ paragraph, paragraphIndex }) => tasks[paragraphIndex].role !== "conclusion" && !/\[\^\d+\]/.test(paragraph))
           .map(({ paragraphIndex }) => tasks[paragraphIndex].index);
         if (uncited.length) throw new Error(`Cite the assigned findings in paragraph indexes ${uncited.join(", ")} with [^sourceId] markers. Every body paragraph needs at least one citation.`);
-        // More than one standalone evidence-limitation sentence per paragraph
-        // reads as a caveat list. Fold extras into analysis while retrying.
+        // Standalone evidence-limitation sentences past their allowance read
+        // as a caveat list. Evaluative tasks (limits, trade-offs,
+        // counterarguments) genuinely need more room than other paragraphs.
+        // Fold extras into analysis while retrying.
         const piled = value.paragraphs
-          .map((paragraph, paragraphIndex) => ({ paragraph, paragraphIndex }))
-          .filter(({ paragraph, paragraphIndex }) => tasks[paragraphIndex].role !== "conclusion" &&
-            splitSentences(paragraph).filter((s) => isLimitationSentence(s)).length > 1)
-          .map(({ paragraphIndex }) => tasks[paragraphIndex].index);
-        if (piled.length) throw new Error(`Paragraph indexes ${piled.join(", ")} state evidence limits more than once. Keep a single limitation sentence per paragraph and fold the rest into analysis.`);
+          .map((paragraph, paragraphIndex) => ({ paragraph, task: tasks[paragraphIndex] }))
+          .filter(({ paragraph, task }) => task.role !== "conclusion" &&
+            splitSentences(paragraph).filter((s) => isLimitationSentence(s)).length >
+              limitationAllowance(task.point, task.section >= 0 ? plan.headings[task.section] : input.topic))
+          .map(({ task }) => task.index);
+        if (piled.length) throw new Error(`Paragraph indexes ${piled.join(", ")} state evidence limits over their allowance. Keep at most two limitation sentences per paragraph (three where the task evaluates limits), folding the rest into analysis.`);
         // Writers under-write: hold every paragraph to two-thirds of its word
         // budget and the conclusion to two-thirds of its target, while the
         // retry still has context. The ±400-word tolerance absorbs overshoot.
