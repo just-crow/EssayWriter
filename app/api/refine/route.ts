@@ -5,6 +5,7 @@ import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema, WriterDraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
 import { validateDraft, prepareDraft, sourcesTextMap, splitSentences, normQuote } from "@/lib/validate";
+import { missingEnds } from "@/lib/essay-endings";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
 import type { SourceItem } from "@/lib/essay-types";
 import { saveDocxFile } from "@/lib/docx-store";
@@ -211,8 +212,22 @@ export async function POST(req: Request) {
               }
             }
           }
+          // A revision that strips every citation marker leaves the audit with
+          // nothing to verify (its exact historical failure). Fail fast with
+          // guidance instead of a cryptic verification error.
+          const citedAnywhere = [...d.introduction, ...d.sections.flatMap((s) => s.paragraphs)].some((p) => /\[\^\d+\]/.test(p));
+          if (!citedAnywhere) {
+            throw new Error("The revision cites no sources: every [^n] footnote marker is gone. Preserve the essay's existing citation markers on factual sentences instead of removing them.");
+          }
           const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources], { onProvider: noteProvider, preserveTexts });
           assertUncitedConclusion(d);
+          // A vanished end is a retryable failure, never a silent skip: the
+          // model restores it from the established essay on the next attempt.
+          // (This exact failure emptied three historical revisions.)
+          const gone = missingEnds(d);
+          if (gone.length > 0) {
+            throw new Error(`The ${gone.join(" and ")} ${gone.length > 1 ? "are" : "is"} empty after source checks (every sentence was removed). Restore ${gone.length > 1 ? "them" : "it"} from the established essay using only supported claims.${audit.removed.length > 0 ? ` Removed:\n${audit.removed.slice(0, 8).join("\n")}` : ""}`);
+          }
           try {
             assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
           } catch (err) {
