@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { STRUCTURE_SYSTEM, DRAFT_SYSTEM, REFINE_SYSTEM, structureUserPrompt, draftUserPrompt, suggestedSectionCount } = require('../lib/prompts.ts');
+const { GLOBAL_STYLE_RULES, STRUCTURE_SYSTEM, DRAFT_SYSTEM, REFINE_SYSTEM, structureUserPrompt, draftUserPrompt, suggestedSectionCount } = require('../lib/prompts.ts');
 
 test('shared essay prompts do not prescribe a subject or learning-platform application', () => {
   for (const prompt of [STRUCTURE_SYSTEM, DRAFT_SYSTEM, REFINE_SYSTEM]) {
@@ -12,6 +12,12 @@ test('shared essay prompts do not prescribe a subject or learning-platform appli
     assert.ok(draftUserPrompt(input).startsWith(`Topic: ${topic}\n`));
     assert.doesNotMatch(draftUserPrompt(input), /platform|interactive learning|curriculum|gamification/i);
   }
+});
+
+test('essays close with a conclusion unless instructions say otherwise', () => {
+  assert.match(GLOBAL_STYLE_RULES, /close every essay with exactly one developed conclusion paragraph/);
+  assert.match(GLOBAL_STYLE_RULES, /unless the user's instruction sheet explicitly forbids/);
+  assert.match(STRUCTURE_SYSTEM, /unless the instruction sheet forbids a conclusion/);
 });
 
 test('outline section count scales with the word target', () => {
