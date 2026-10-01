@@ -28,7 +28,7 @@ import { plannedEvidence, snapshotDraft, type DraftDiagnostics } from "@/lib/dra
 import { ensureEssayEnds } from "@/lib/essay-endings";
 
 export const runtime = "nodejs";
-export const maxDuration = 660;
+export const maxDuration = 300;
 
 const Body = z.object({
   topic: z.string().min(1).max(500),
@@ -43,7 +43,7 @@ const Body = z.object({
 });
 
 export async function POST(req: Request) {
-  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(600_000)]);
+  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(290_000)]);
   try {
     const body = Body.parse(await req.json());
     try {
@@ -328,7 +328,7 @@ export async function POST(req: Request) {
       downloadUrl: `/api/download/${record.id}`,
     });
   } catch (err) {
-    if (signal.aborted) return NextResponse.json({error: req.signal.aborted ? "Drafting was cancelled." : "The model service did not finish drafting and source checks within 10 minutes. Please try again when the service is responsive."}, {status: req.signal.aborted ? 499 : 504});
+    if (signal.aborted) return NextResponse.json({error: req.signal.aborted ? "Drafting was cancelled." : "The model service did not finish drafting and source checks within 5 minutes. Please try again when the service is responsive."}, {status: req.signal.aborted ? 499 : 504});
     const message = err instanceof Error ? err.message : "Draft failed.";
     return NextResponse.json({ error: message }, { status: 500 });
   }

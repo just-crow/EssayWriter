@@ -22,7 +22,7 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(url === "/api/draft" ? 610_000 : 240_000),
+    signal: AbortSignal.timeout(url === "/api/draft" ? 300_000 : 240_000),
   });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status}).`);
