@@ -17,7 +17,7 @@ test('shared essay prompts do not prescribe a subject or learning-platform appli
 test('essays close with a conclusion unless instructions say otherwise', () => {
   assert.match(GLOBAL_STYLE_RULES, /close every essay with exactly one developed conclusion paragraph/);
   assert.match(GLOBAL_STYLE_RULES, /unless the user's instruction sheet explicitly forbids/);
-  assert.match(STRUCTURE_SYSTEM, /unless the instruction sheet forbids a conclusion/);
+  assert.match(STRUCTURE_SYSTEM, /Omit either only when the instruction sheet forbids it/);
 });
 
 test('outline section count scales with the word target', () => {

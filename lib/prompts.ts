@@ -52,9 +52,9 @@ Return ONLY valid JSON with this shape:
 Cover every instruction-sheet requirement, every criterion and strand. Map each paragraph to its criterion and strand. When no instruction sheet is given, use standard academic conventions and leave criterion/strand empty rather than inventing strands.
 CHECKLIST: list ONLY requirements from the user's instruction sheet, topic, and word target. Never list internal writing rules (style bans, citation mechanics, paragraph shapes, conclusion rules) as checklist items.
 THESIS: answer the actual question with a defensible position plus the main line of reasoning, not a generic "this essay will discuss" summary. For evaluate/assess questions, state the qualified judgment up front.
-HEADINGS: specific and distinct, never generic ("Core Principles", "Conclusion", "Introduction"). Each heading must promise a different job. Only name a person, theory, or case in a heading if a paragraph point beneath it investigates that exact name.
+HEADINGS: specific and distinct, never generic ("Core Principles", "Background"). Each heading must promise a different job. Only name a person, theory, or case in a heading if a paragraph point beneath it investigates that exact name. The outline always opens with an "Introduction" section and closes with a "Conclusion" section, each with its own paragraph-level points.
 SHAPE: scale the number of body sections to the word target at about one section per 250 words (the user message states the exact count for this essay), unless the instruction sheet fixes the structure. Break every section into several paragraph-level bullet points (usually 2 to 4), each with its own point, criterion, and strand. A section with only a single line is a defect. Each section should carry roughly 200 to 300 words of the final essay: prefer more sections over bloated ones as the target grows. Points are distinct investigative questions, not restatements of each other.
-The app provides one introduction and one conclusion separately. Put only substantive body sections in "sections"; do not add sections headed Introduction or Conclusion. Describe any introductory framing or concluding synthesis in the thesis or checklist instead. The thesis and checklist must give the closing conclusion something to synthesize — unless the instruction sheet forbids a conclusion or prescribes a different closing, in which case note that in the checklist and obey it.
+The essay opens with the Introduction section (the question and the thesis, as paragraph points) and closes with the Conclusion section (restatement plus synthesis and judgment, as paragraph points) — the draft renders these from the outline, so put the actual content there instead of describing it in the thesis or checklist. Omit either only when the instruction sheet forbids it or prescribes a different opening or closing, and note that exception in the checklist.
 If no instruction sheet or context is given, proceed with the topic alone using standard academic essay conventions and list the assumed requirements in the checklist.
 `.trim();
 
@@ -112,7 +112,7 @@ export function structureUserPrompt(input: {
   extraInstructions: string;
   wordTarget: number;
 }): string {
-  return `Topic: ${input.topic}\nWord target: ${input.wordTarget}\nInstruction sheet / criteria:\n${input.instructionText}\nExtra user instructions: ${input.extraInstructions}\nAim for about ${suggestedSectionCount(input.wordTarget)} substantive body sections (fewer only if the instruction sheet fixes the structure).\n\nBuild the structure JSON now.`;
+  return `Topic: ${input.topic}\nWord target: ${input.wordTarget}\nInstruction sheet / criteria:\n${input.instructionText}\nExtra user instructions: ${input.extraInstructions}\nAim for about ${suggestedSectionCount(input.wordTarget)} substantive body sections (fewer only if the instruction sheet fixes the structure), always framed by an Introduction section and a Conclusion section with their own paragraph points.\n\nBuild the structure JSON now.`;
 }
 
 export function draftUserPrompt(input: {

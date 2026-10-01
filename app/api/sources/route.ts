@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { type SourceItem } from "@/lib/essay-types";
 import { liveSearch, normalizeUrl, extractPages, buildSources, type WebSource } from "@/lib/search";
+import { structuralSectionRole } from "@/lib/paragraph-plan";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -40,7 +41,9 @@ export function planSourceQueries(topic: string, structureJson: string): Array<{
     const structure = JSON.parse(structureJson) as {
       sections?: Array<{ heading?: string; paragraphs?: Array<{ point?: string }> }>;
     };
-    const sections = (structure.sections ?? []).filter((section) => section.heading?.trim());
+    // Introduction and Conclusion sections frame the essay but need no
+    // dedicated evidence searches; the query budget stays on body sections.
+    const sections = (structure.sections ?? []).filter((section) => section.heading?.trim() && !structuralSectionRole(section.heading || ""));
     if (!sections.length) return [general];
     const searchStopwords = new Set("about advantages and benefits challenges effects essay evaluation impact limitations of on planning role the with".split(" "));
     const subject = (topic.toLowerCase().match(/[\p{L}\p{N}-]+/gu) ?? [])
