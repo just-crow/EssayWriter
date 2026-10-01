@@ -64,6 +64,8 @@ export function sourceQualityFactor(source: SourceItem): number {
 export function planParagraphs(input: {
   topic: string; wordTarget: number; structureJson: string;
   minimumFootnotes?: number; minimumSources?: number; maxAssignedFindings?: number;
+  /** Normalized finding keys to exclude (already tried and deleted). */
+  excludeFindings?: string[];
 }, sources: SourceItem[]) {
   const outline = JSON.parse(input.structureJson) as {
     thesis?: string; sections?: Array<{ heading?: string; paragraphs?: Array<{ point?: string; criterion?: string; strand?: string }> }>;
@@ -100,8 +102,12 @@ export function planParagraphs(input: {
   // Budgets run above the nominal share: writers under-write to roughly
   // two-thirds of budget, and the ±400-word tolerance absorbs overshoot.
   const bodyWords = Math.max(75, Math.round(((input.wordTarget - 2 * endWords) / count) * 1.25));
+  // A retry round after mass deletion reserves strictly fresh evidence:
+  // findings that already failed verification are removed from the bank.
+  const blocked = new Set((input.excludeFindings ?? []).map((key) => normQuote(key)));
   const bank = sources.flatMap(source => sourceFindingSentences(source.content)
-    .map(text => ({ sourceId: Number(source.id), title: source.title, text, tokens: terms(text), key: normQuote(text), quality: sourceQualityFactor(source) })));
+    .map(text => ({ sourceId: Number(source.id), title: source.title, text, tokens: terms(text), key: normQuote(text), quality: sourceQualityFactor(source) })))
+    .filter((finding) => !blocked.has(finding.key));
   if (!bank.length) throw new Error("The selected pages contain no substantive findings. Gather sources again.");
   const frequency = new Map<string, number>();
   for (const finding of bank) for (const token of finding.tokens) frequency.set(token, (frequency.get(token) || 0) + 1);

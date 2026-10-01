@@ -12,6 +12,32 @@ import { SOURCE_BASED_ARGUMENT_GUIDANCE } from "./prompts";
 export interface WritingInput {
   topic: string; instructionText: string; extraInstructions: string;
   wordTarget: number; structureJson: string; minimumFootnotes?: number; minimumSources?: number;
+  /** Normalized finding keys to exclude from planning (already failed verification). */
+  excludeFindings?: string[];
+}
+
+/** Map removed-claim report lines back to the planned finding texts that
+ * share vocabulary with them, so a retry round reserves strictly fresh
+ * evidence instead of re-citing the same failed passages. Entries look like
+ * `paragraph 1: unsupported — "sentence" (reason)`. Generic token overlap,
+ * no topic content. */
+export function excludedFindingsFor(removedEntries: string[], assignedTexts: string[]): string[] {
+  const out: string[] = [];
+  for (const entry of removedEntries) {
+    const match = entry.match(/[“"](.+?)[”"]\s*\(/);
+    if (!match) continue;
+    const claimTokens = tokens(match[1]);
+    for (const text of assignedTexts) {
+      const findingTokens = tokens(text);
+      let shared = 0;
+      for (const word of claimTokens) if (findingTokens.has(word)) shared++;
+      if (shared >= 2) {
+        const key = normQuote(text);
+        if (!out.includes(key)) out.push(key);
+      }
+    }
+  }
+  return out;
 }
 
 const tokens = (text: string) => new Set((text.toLowerCase().match(/[a-z]{4,}/g) || []).map(word => word.replace(/s$/, "")));

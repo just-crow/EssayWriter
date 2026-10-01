@@ -15,7 +15,7 @@ import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
 import { normalizeUrl, MAX_SOURCES_JSON_CHARS } from "@/lib/search";
 import { auditAndAlignGrounding } from "@/lib/grounding-audit";
-import { buildWritingPlan, composePlannedDraft } from "@/lib/planned-writer";
+import { buildWritingPlan, composePlannedDraft, excludedFindingsFor } from "@/lib/planned-writer";
 import { structuralSectionRole } from "@/lib/paragraph-plan";
 import { removeOffTopicProse } from "@/lib/topic-relevance";
 import { groupCitationRuns } from "@/lib/citation-runs";
@@ -67,8 +67,28 @@ export async function POST(req: Request) {
     const selectedSources = sourceItems.filter(source => source.content.trim().length >= 40);
     const selectedWithIds = selectedSources.map((source, index) => ({ ...source, id: String(index + 1) }));
     const writingSources = selectedWithIds;
-    const plan = buildWritingPlan(body, writingSources);
+    // Minimums are targets, not gates: when the evidence bank cannot support
+    // the requested floors, draft from what exists (floors of 1) and report
+    // the shortfall as a warning instead of discarding the essay. Only a
+    // truly empty bank still fails (nothing verifiable to write from).
+    let writingInput = { ...body };
+    let planNote: string | null = null;
+    const buildPlan = () => buildWritingPlan(writingInput, writingSources);
+    let plan: ReturnType<typeof buildPlan>;
+    try {
+      plan = buildPlan();
+    } catch (err) {
+      planNote = err instanceof Error ? err.message : String(err ?? "");
+      writingInput = { ...body, minimumSources: 1, minimumFootnotes: 1 };
+      plan = buildPlan();
+    }
     const findings = JSON.stringify(plan);
+    // Soft warnings collected during validation; appended to issues so the
+    // essay ships with honest notes instead of failing outright.
+    const softWarnings: Array<{ code: string; detail: string }> = [];
+    if (planNote) {
+      softWarnings.push({ code: "BELOW_MINIMUMS", detail: `Requested citation minimums reduced for this evidence bank: ${planNote} The essay is delivered as-is.` });
+    }
     const diagnostics: DraftDiagnostics = {plan: plannedEvidence(plan.tasks, plan.headings), stages: [], removed: []};
     // Provider provenance for the UI: which models actually served this
     // essay (paid Luna vs fallback), in first-use order.
@@ -159,10 +179,22 @@ export async function POST(req: Request) {
           assertUncitedConclusion(d);
           const counts = citationCounts(d);
           if (counts.footnotes < body.minimumFootnotes || counts.works < body.minimumSources) {
-            await repairCitationMinimums(d, body, writingSources, signal, noteProvider);
+            // Repair is best-effort: its own failure must not discard the essay.
+            try {
+              await repairCitationMinimums(d, body, writingSources, signal, noteProvider);
+            } catch {
+              signal.throwIfAborted();
+            }
           }
           diagnostics.stages.push(snapshotDraft(d, "Citation check"));
-          assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
+          // Below-minimum essays ship with a warning, not an error: the reader
+          // sees what verified plus an honest shortfall note.
+          try {
+            assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
+          } catch (err) {
+            signal.throwIfAborted();
+            softWarnings.push({ code: "BELOW_MINIMUMS", detail: `${err instanceof Error ? err.message : "Below requested citation minimums."} The essay is delivered as-is; gather stronger sources or lower the minimums for fuller coverage.` });
+          }
           if (body.wordTarget >= 400) {
             // This optional pass extends only depleted sections with fresh,
             // independently checked findings. A provider outage must not
@@ -186,11 +218,10 @@ export async function POST(req: Request) {
           const bodyEnd = d.introduction.length + d.sections.flatMap((section) => section.paragraphs).length;
           const bodyClaims = new Set(d.evidence.filter((item) => item.paragraph >= d.introduction.length && item.paragraph < bodyEnd).map((item) => item.source));
           // Analysis and explicitly proposed designs can occupy paragraphs
-          // without introducing external facts. Require substantive verified
-          // findings across the essay, rather than fabricating a fact solely
-          // to put a citation in every recommendation paragraph.
+          // without introducing external facts. Thinly supported essays ship
+          // with a warning rather than failing, like citation minimums.
           if (bodyClaims.size < Math.max(1, Math.floor(body.wordTarget / 400))) {
-            throw new Error(`Develop more factual findings from the selected passages to support the essay's analysis. The body has only ${bodyClaims.size} directly supported findings.${removed}`);
+            softWarnings.push({ code: "BELOW_MINIMUMS", detail: `Only ${bodyClaims.size} directly supported finding${bodyClaims.size === 1 ? "" : "s"} in the body. The essay is delivered as-is; gather stronger sources for deeper coverage.` });
           }
           const words = countWords(d);
           if (Math.abs(words - body.wordTarget) > 400) {
@@ -236,15 +267,23 @@ export async function POST(req: Request) {
         // inside and are rethrown immediately.
         let guided = failure;
         let last: unknown = null;
+        // Findings deleted by verification in one round are excluded from the
+        // next round's plan, so recomposition develops fresh passages instead
+        // of re-citing the same failed evidence.
+        const excluded: string[] = [];
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
-            return JSON.stringify(await composePlannedDraft(body, writingSources, guided, previous?.success ? previous.data : undefined, signal, noteProvider));
+            return JSON.stringify(await composePlannedDraft({ ...writingInput, excludeFindings: excluded.length ? excluded : undefined }, writingSources, guided, previous?.success ? previous.data : undefined, signal, noteProvider));
           } catch (e) {
             last = e;
             signal.throwIfAborted();
             const msg = e instanceof Error ? e.message : String(e ?? "");
-            if (!/omitted reserved works|Use only (the )?(planned )?source IDs|word synopsis|approximately .* words|cited 0 distinct works|below the requested|needs at least one citation|with \[\^sourceId\] markers|toward their word budgets|developed conclusion|evidence limits/i.test(msg)) throw e;
-            guided = `${failure}\n${msg}`.trim();
+            if (!/omitted reserved works|Use only (the )?(planned )?source IDs|word synopsis|approximately .* words|cited 0 distinct works|below the requested|needs at least one citation|with \[\^sourceId\] markers|toward their word budgets|developed conclusion|evidence limits|review removed|audit removed|No factual claims|no usable in-text citations|directly supported findings|outside the .*word target tolerance|developed section paragraphs|no more than \d+ developed/i.test(msg)) throw e;
+            const assignedTexts = plan.tasks.flatMap((task) => task.assigned.map((finding) => finding.text));
+            for (const key of excludedFindingsFor(diagnostics.removed, assignedTexts)) {
+              if (!excluded.includes(key)) excluded.push(key);
+            }
+            guided = `${failure}\n${msg}\nReserve strictly unused findings: do not cite evidence already removed above; develop different passages instead.`.trim();
           }
         }
         throw last;
@@ -254,6 +293,7 @@ export async function POST(req: Request) {
     // rebuild here or the persisted list misses the repaired citations.
     rebuildWorksCited(draft);
     const issues = validateDraft(draft);
+    issues.push(...softWarnings);
     const wordCount = countWords(draft);
     // Agent-style coverage report: every outline requirement located in the
     // essay, plus the word-target row from the actual count.

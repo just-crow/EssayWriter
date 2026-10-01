@@ -162,6 +162,8 @@ export async function POST(req: Request) {
     const noteProvider = (provider: "openrouter" | "nvidia") => {
       if (!usedProviders.includes(provider)) usedProviders.push(provider);
     };
+    // Below-minimum outcomes ship with warnings, not errors.
+    const softWarnings: Array<{ code: string; detail: string }> = [];
     const trunc = (content: string) => content.length > 12000 ? content.slice(0, 12000) + "\n[truncated]" : content;
     const writerDbSources = dbSources
       .filter((s) => body.minimumSources > citedUrls.size || citedUrls.has(normalizeUrl(s.url)))
@@ -211,11 +213,15 @@ export async function POST(req: Request) {
           }
           const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources], { onProvider: noteProvider, preserveTexts });
           assertUncitedConclusion(d);
-          assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
+          try {
+            assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
+          } catch (err) {
+            softWarnings.push({ code: "BELOW_MINIMUMS", detail: `${err instanceof Error ? err.message : "Below requested citation minimums."} The revision is delivered as-is.` });
+          }
           const bodyEnd = d.introduction.length + d.sections.flatMap((section) => section.paragraphs).length;
           const bodyClaims = new Set(d.evidence.filter((item) => item.paragraph >= d.introduction.length && item.paragraph < bodyEnd).map((item) => item.source));
           if (bodyClaims.size < Math.max(1, Math.floor(project.wordTarget / 400))) {
-            throw new Error(`Develop more directly supported source findings in the body. Currently only ${bodyClaims.size} factual findings are verified.`);
+            softWarnings.push({ code: "BELOW_MINIMUMS", detail: `Only ${bodyClaims.size} directly supported finding${bodyClaims.size === 1 ? "" : "s"} in the body. The revision is delivered as-is.` });
           }
           const removed = audit.removed.length > 0
             ? ` The source audit removed these unsupported claims; replace them only with directly supported statements:\n${audit.removed.slice(0, 8).join("\n")}`
@@ -248,6 +254,7 @@ export async function POST(req: Request) {
       nimChatLong
     );
     const issues = validateDraft(draft);
+    issues.push(...softWarnings);
     // Minimal diagnostics so the UI can report which providers served this
     // revision (full stage history is a draft-route feature).
     draft.diagnostics = { plan: [], stages: [], removed: [], providers: [...usedProviders] };

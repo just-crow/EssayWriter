@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const nim = require('../lib/nim.ts');
-const { buildWritingPlan, composePlannedDraft, removeRepeatedProse } = require('../lib/planned-writer.ts');
+const { buildWritingPlan, composePlannedDraft, removeRepeatedProse, excludedFindingsFor } = require('../lib/planned-writer.ts');
 const input = {topic:'Cell measurements', instructionText:'Evaluate the recorded measurements.', extraInstructions:'', wordTarget:600, minimumSources:10, minimumFootnotes:1, structureJson:JSON.stringify({thesis:'Assess the measurements.', sections:[{heading:'Cell measurements', paragraphs:[{point:'Evaluate the cell measurements under observed conditions.'}]}]})};
 const sources = Array.from({length:10}, (_,i) => ({id:String(i+1), title:`Measurement study ${i+1}`, url:`https://example.org/study-${i+1}`, content:`Cell measurements in study ${i+1} recorded distinct observations under the experimental conditions described in the report.`}));
 const overview = 'The recorded observations provide the basis for evaluating these measurements within the experimental conditions described. '.repeat(5);
@@ -177,6 +177,21 @@ test('a body paragraph that masquerades as the conclusion is corrected before so
     assert.equal(calls,2);
     assert.doesNotMatch(draft.sections[0].paragraphs[0],/^In conclusion/);
   }finally{nim.nimChatLong=original;}
+});
+
+test('removed claims map back to the planned findings that fed them', () => {
+  const assigned = [
+    'Urban green space mitigates heat through shade and evapotranspiration in dense districts.',
+    'Green gentrification displaces low-income residents near new parks.',
+  ];
+  const removed = [
+    'paragraph 2: partially_supported — "Green areas mitigate urban heat through shade." (Shares some terms.)',
+    'paragraph 5: off topic — "Unrelated funding note." (No match.)',
+  ];
+  const excluded = excludedFindingsFor(removed, assigned);
+  assert.equal(excluded.length, 1);
+  assert.ok(excluded[0].includes('evapotranspiration'));
+  assert.deepEqual(excludedFindingsFor(['no quoted sentence here'], assigned), []);
 });
 
 test('piled limitation sentences are rewritten during drafting',async()=>{

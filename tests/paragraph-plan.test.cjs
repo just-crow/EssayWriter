@@ -32,6 +32,25 @@ test('conference session summaries are not treated as scientific findings',()=>{
   assert.deepEqual(sourceFindingSentences('The session highlights climate-driven impacts on plant growth and health.'),[]);
 });
 
+test('excluded findings never enter a replanned essay',()=>{
+  const input = {topic:'Crop editing and food security',wordTarget:600,minimumSources:1,structureJson:JSON.stringify({thesis:'Evaluate crop editing.',sections:[
+    {heading:'Mechanisms and Applications',paragraphs:[{point:'Explain observed crop traits in rice experiments.'}]},
+  ]})};
+  const sources = [
+    {id:'1',title:'Crop research',content:'Crop editing can modify plant genes and affect observed traits in rice experiments.'},
+    {id:'2',title:'Field research',content:'Field trials measure drought tolerance in edited rice across dry seasons.'},
+  ];
+  const first = planParagraphs(input, sources);
+  const assigned = first.tasks.flatMap(task => task.assigned.map(finding => finding.text));
+  assert.ok(assigned.length > 0);
+  const second = planParagraphs({ ...input, excludeFindings: [assigned[0]] }, sources);
+  const reassigned = second.tasks.flatMap(task => task.assigned.map(finding => finding.text));
+  assert.ok(reassigned.length > 0);
+  for (const text of reassigned) {
+    assert.notEqual(text, assigned[0], 'a retry round must not reassign deleted evidence');
+  }
+});
+
 test('a 1200-word essay develops each of three major questions in two paragraphs',()=>{
   const sections=['Scientific mechanisms','Social consequences','Ethical implications'].map(heading=>({heading,paragraphs:[{point:`Evaluate ${heading.toLowerCase()} using the available evidence.`}]}));
   const plan=planParagraphs({topic:'Genome editing and society',wordTarget:1200,structureJson:JSON.stringify({sections})},[
