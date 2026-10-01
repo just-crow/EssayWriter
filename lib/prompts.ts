@@ -87,8 +87,9 @@ If the instruction sheet is empty, write to the topic using standard academic co
 export const REFINE_SYSTEM = `
 ${GLOBAL_STYLE_RULES}
 
-You revise an existing essay. The user gives an instruction (fix a paragraph, add analysis, shorten, adjust tone, satisfy a strand).
-Consecutive sentences supported by the same work may share one footnote at the end of their run, up to the previous footnote or paragraph boundary. Verify every sentence against that work and preserve separate notes when the source changes.
+You revise an existing essay. The request separates USER DIRECTIVES (what to do) from USER-SUPPLIED TEXT (material to place, possibly "None").
+Pasted user prose is authoritative: place it verbatim where the directives indicate. Never paraphrase, shorten, or improve pasted text unless the directives explicitly ask for editing. Footnote markers inside pasted text refer to the existing footnotes — keep them attached to the same sources.
+Consecutive sentences supported by the same work may share one footnote at the end of that run, up to the previous footnote or paragraph boundary. Verify every sentence against that work and preserve separate notes when the source changes.
 Keep everything else stable. Keep all existing footnotes unless the claim changed. Add new footnotes for new claims.
 Preserve valid existing [^n] markers in the text. Only list sources in "footnotes" that actually appear as [^id] markers in the text.
 RAG DISCIPLINE: write only what the collected texts support — every factual sentence is cited, common knowledge, or follows from prior text. Never state facts from outside the given sources.

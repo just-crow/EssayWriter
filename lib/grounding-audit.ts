@@ -65,7 +65,7 @@ export async function auditAndAlignGrounding(
     container?: string;
     kind?: string;
   }>,
-  options: { signal?: AbortSignal; batchSize?: number; fast?: boolean; topic?: string; onProvider?: (provider: ModelProvider) => void } = {}
+  options: { signal?: AbortSignal; batchSize?: number; fast?: boolean; topic?: string; onProvider?: (provider: ModelProvider) => void; preserveTexts?: string[] } = {}
 ): Promise<{ removed: string[] }> {
   const citationUrls = new Map(draft.footnotes.map((note) => [note.id, note.url]));
   const paragraphs = [
@@ -330,6 +330,18 @@ export async function auditAndAlignGrounding(
     if (claim.paragraph >= conclusionStart && claim.status === "partially_supported") {
       claim.status = "logical_inference";
       claim.reason += " Kept as conclusion synthesis of established points.";
+    }
+  }
+  // User-supplied wording (pasted revision text) is authoritative content,
+  // not a claim to verify: keep it as written. Its citations are still
+  // verified independently, so a wrong marker is corrected, not the prose.
+  if (options.preserveTexts && options.preserveTexts.length > 0) {
+    const preserved = new Set(options.preserveTexts.map((t) => normQuote(t)));
+    for (const claim of audit.claims) {
+      if (preserved.has(normQuote(claim.sentence.replace(/\[\^\d+\]/g, "").trim()))) {
+        claim.status = "nonfactual";
+        claim.reason += " User-supplied wording preserved as written.";
+      }
     }
   }
   const bad = audit.claims.filter((claim) => claim.status === "unsupported" || claim.status === "partially_supported");

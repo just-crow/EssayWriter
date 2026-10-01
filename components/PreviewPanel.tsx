@@ -297,6 +297,9 @@ export default function PreviewPanel({
           version={entry?.version ?? null}
           disabled={!entry}
           onRefined={onRefined}
+          targets={[
+            ...(entry?.draft ? ["Introduction", ...entry.draft.sections.map((s) => s.heading), "Conclusion"] : []),
+          ]}
         />
       </section>
 

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { EssayDraft } from "./essay-types";
 import { completeJson, nimChatLong, type ModelProvider } from "./nim";
 import { citationScopes } from "./citation-runs";
-import { splitSentences } from "./validate";
+import { normQuote, splitSentences } from "./validate";
 
 const RelevanceSchema = z.object({decisions: z.array(z.object({
   paragraph: z.number().int().min(0), sentenceIndex: z.number().int().min(0),
@@ -12,7 +12,7 @@ const RelevanceSchema = z.object({decisions: z.array(z.object({
 /** A focused topic check before source verification. A page can faithfully
  * support a sentence about the wrong subject; factual grounding alone cannot
  * decide whether that sentence belongs in this particular essay. */
-export async function removeOffTopicProse(draft: EssayDraft, topic: string, signal?: AbortSignal, structureJson?: string, onProvider?: (provider: ModelProvider) => void): Promise<string[]> {
+export async function removeOffTopicProse(draft: EssayDraft, topic: string, signal?: AbortSignal, structureJson?: string, onProvider?: (provider: ModelProvider) => void, preserveTexts?: string[]): Promise<string[]> {
   let sectionPurposes: Array<{heading: string; points: string[]}> = [];
   try {
     const outline = JSON.parse(structureJson || "{}");
@@ -55,7 +55,11 @@ export async function removeOffTopicProse(draft: EssayDraft, topic: string, sign
         },
       }, nimChatLong);
     }));
-    offTopic.push(...results.flatMap(result => result.decisions.filter(item => !item.relevant)));
+    // User-supplied wording is never off-topic: the author placed it.
+    const preserved = new Set((preserveTexts ?? []).map((t) => normQuote(t)));
+    const isPreserved = (paragraph: number, sentenceIndex: number) =>
+      preserved.has(normQuote(items[paragraph].sentences[sentenceIndex].text.replace(/\[\^\d+\]/g, "").trim()));
+    offTopic.push(...results.flatMap(result => result.decisions.filter(item => !item.relevant && !isPreserved(item.paragraph, item.sentenceIndex))));
   }
   const removed = offTopic.map(item => `paragraph ${item.paragraph}: off topic — “${items[item.paragraph].sentences[item.sentenceIndex].text}” (${item.reason})`);
   if (!removed.length) return removed;

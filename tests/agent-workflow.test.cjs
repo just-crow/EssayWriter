@@ -51,6 +51,10 @@ test('verified paragraphs lose orphan artifacts, never meaning', () => {
     tidyVerifiedParagraph('Trees help, e.g. oaks, in streets.'),
     'Trees help, e.g. oaks, in streets.'
   );
+  assert.equal(
+    tidyVerifiedParagraph('Ties strengthened—and isolation fell; factors improved.'),
+    'Ties strengthened, and isolation fell. Factors improved.'
+  );
 });
 
 test('writer-stage voice removes banned punctuation', () => {

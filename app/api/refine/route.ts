@@ -4,13 +4,25 @@ import { completeJson, nimChatLong } from "@/lib/nim";
 import { REFINE_SYSTEM } from "@/lib/prompts";
 import { DraftSchema, WriterDraftSchema } from "@/lib/essay-types";
 import { buildDocx, countWords } from "@/lib/docx-build";
-import { validateDraft, prepareDraft, sourcesTextMap, splitSentences } from "@/lib/validate";
+import { validateDraft, prepareDraft, sourcesTextMap, splitSentences, normQuote } from "@/lib/validate";
 import { liveSearch, normalizeUrl, extractPages, buildSources } from "@/lib/search";
 import type { SourceItem } from "@/lib/essay-types";
 import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
 import { auditAndAlignGrounding } from "@/lib/grounding-audit";
 import { assertCitationMinimums, assertUncitedConclusion } from "@/lib/citation-limits";
+import {
+  cutAtWord,
+  dropDanglingMarkers,
+  missingVerbatim,
+  needsNewSources,
+  normalizeVerbatimTarget,
+  placeVerbatim,
+  resolveVerbatimTarget,
+  splitPastedMaterial,
+  userSentenceSet,
+  type VerbatimPlacement,
+} from "@/lib/refine-intent";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -19,6 +31,10 @@ const Body = z.object({
   projectId: z.string().min(1),
   versionId: z.string().nullish(),
   instruction: z.string().min(1).max(10000),
+  /** Optional prose to insert exactly as written (separate UI field). */
+  verbatimText: z.string().max(20000).default(""),
+  /** Where to put it: "introduction" | "conclusion" | section heading. */
+  verbatimTarget: z.string().max(200).default(""),
   minimumFootnotes: z.number().int().min(1).max(30).default(1),
   minimumSources: z.number().int().min(1).max(18).default(1),
 });
@@ -59,6 +75,29 @@ export async function POST(req: Request) {
     } catch {
       // fall through with empty sets
     }
+    // Separate directives (what to do) from pasted prose (material to place
+    // verbatim). Pasted text is never instructions and never needs paraphrase.
+    const intent = splitPastedMaterial(body.instruction);
+    const verbatim = body.verbatimText.trim() || intent.pasted;
+    const preserveTexts = [...userSentenceSet(verbatim)];
+
+    // Mechanically pre-place user text on a working copy so the model sees it
+    // in situ; the post-check below still enforces verbatim survival.
+    let placement: VerbatimPlacement = { applied: false, targetLabel: "", part: null, sectionIndex: null, heading: null };
+    try {
+      const parsed = DraftSchema.parse(JSON.parse(base.essayJson));
+      const working = structuredClone(parsed);
+      if (verbatim) {
+        const headings = parsed.sections.map((s) => s.heading);
+        const explicit = normalizeVerbatimTarget(body.verbatimTarget);
+        const target = explicit || resolveVerbatimTarget("", intent.directives, headings);
+        placement = placeVerbatim(working, target, verbatim);
+      }
+      baseEssayForWriter = JSON.stringify({ ...working, diagnostics: undefined });
+    } catch {
+      // fall through with the raw essay JSON
+    }
+
     const today = new Date().toLocaleDateString("en-GB", {
       day: "numeric",
       month: "short",
@@ -68,15 +107,19 @@ export async function POST(req: Request) {
     let sourceBlock =
       "No new web pages were fetched for this revision; cite only existing footnotes or common knowledge.";
     try {
+      const queryBasis = intent.directives || body.instruction;
       const followQueries = [
-        `${project.topic} ${body.instruction}`.trim().slice(0, 300),
+        `${project.topic} ${queryBasis}`.trim().slice(0, 300),
         project.topic,
       ].filter((q, i, arr) => q.length > 0 && arr.indexOf(q) === i).slice(0, 3);
       const prohibitNewSources = /\b(?:do not|don't|without|no)\b[^.!?\n]{0,100}\bsources\b/i.test(body.instruction);
-      const web = prohibitNewSources ? [] : await liveSearch(followQueries, 4);
+      // Pure replacement / shortening / restructuring of supplied or existing
+      // material needs no fresh research; anything else keeps fetching.
+      const wantSources = needsNewSources(intent.directives, verbatim.length > 0);
+      const web = prohibitNewSources || !wantSources ? [] : await liveSearch(followQueries, 4);
       const fresh = web.filter((w) => !citedUrls.has(normalizeUrl(w.url))).slice(0, 4);
       if (fresh.length > 0) {
-        const label = `this follow-up (“${body.instruction.slice(0, 80)}”)`;
+        const label = `this follow-up (“${cutAtWord(intent.directives || body.instruction, 80)}”)`;
         const labels = new Map(fresh.map((w) => [w.query, label]));
         const built = buildSources(fresh, labels, today);
         const texts = await extractPages(built.map((s) => s.url));
@@ -128,7 +171,7 @@ export async function POST(req: Request) {
     const draft = await completeJson(
       {
         system: REFINE_SYSTEM,
-        user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\nMinimum footnotes: ${body.minimumFootnotes}\nMinimum distinct cited works: ${body.minimumSources}\nDevelop factual findings from at least this many different source URLs before writing. Cite at least the requested number of separate factual sentences; These are minimums, not exact counts or caps: you may use more footnotes and more distinct works when they support the essay. Do not add decorative citations.\n\nCurrent essay JSON:\n${baseEssayForWriter}\n\nExisting source texts:\n${JSON.stringify(writerDbSources)}\n\nUser revision instruction:\n${body.instruction}\n\n${sourceBlock.replace(JSON.stringify(newSources), JSON.stringify(writerNewSources))}\n\nReturn the revised essay JSON now.`,
+        user: `Instruction sheet:\n${project.instruction}\n\nTopic: ${project.topic}\nWord target: ${project.wordTarget}\nMinimum footnotes: ${body.minimumFootnotes}\nMinimum distinct cited works: ${body.minimumSources}\nDevelop factual findings from at least this many different source URLs before writing. Cite at least the requested number of separate factual sentences; These are minimums, not exact counts or caps: you may use more footnotes and more distinct works when they support the essay. Do not add decorative citations.\n\nCurrent essay JSON:\n${baseEssayForWriter}\n\nExisting source texts:\n${JSON.stringify(writerDbSources)}\n\nUser directives (what to do):\n${intent.directives || body.instruction}\n\nUSER-SUPPLIED TEXT (place verbatim where directed${placement.targetLabel ? ` at ${placement.targetLabel}` : ""}; do not paraphrase, shorten, or improve it):\n${verbatim || "None — compose all prose yourself."}\n\nPlacement: ${placement.targetLabel ? `already applied at ${placement.targetLabel}; preserve it exactly` : verbatim ? "infer the location from the directives" : "no supplied text; revise per the directives"}\n\n${sourceBlock.replace(JSON.stringify(newSources), JSON.stringify(writerNewSources))}\n\nReturn the revised essay JSON now.`,
         temperature: 0.7,
         onProvider: noteProvider,
         maxTokens: Math.min(32768, Math.max(12000, project.wordTarget * 3 + 6000)),
@@ -138,9 +181,35 @@ export async function POST(req: Request) {
         repairResponse: (draft) => JSON.stringify(draft),
         retryTempDelta: 0,
         validate: async (d) => {
+          // Pasted markers may reference old numbering; drop dangling ones
+          // instead of failing — the prose itself is preserved below.
+          dropDanglingMarkers(d);
           prepareDraft(d, sourcesText, { deferEvidence: true });
           assertUncitedConclusion(d);
-          const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources], { onProvider: noteProvider });
+          if (preserveTexts.length > 0) {
+            const allText = [...d.introduction, ...d.sections.flatMap((s) => s.paragraphs), ...d.conclusion].join("\n");
+            const missing = missingVerbatim(allText, new Set(preserveTexts));
+            if (missing.length > 0) {
+              throw new Error(`The supplied user text must appear verbatim in the essay. Restore these sentences exactly as given, without paraphrasing:\n${missing.slice(0, 6).join("\n")}`);
+            }
+            // A replaced part holds ONLY the supplied text: the model may not
+            // pad it with extra sentences around the user's wording.
+            if (placement.applied) {
+              const partTexts: string[] =
+                placement.part === "introduction" ? d.introduction
+                : placement.part === "conclusion" ? d.conclusion
+                : placement.heading ? (d.sections.find((s) => s.heading === placement.heading)?.paragraphs ?? []) : [];
+              const userSet = new Set(preserveTexts);
+              const extras = partTexts
+                .flatMap((p) => splitSentences(p))
+                .map((s) => s.trim())
+                .filter((s) => s && !userSet.has(normQuote(s.replace(/\[\^\d+\]/g, "").trim())));
+              if (extras.length > 0) {
+                throw new Error(`The ${placement.targetLabel} must contain only the supplied user text. Remove the added sentences and keep the supplied wording exactly.`);
+              }
+            }
+          }
+          const audit = await auditAndAlignGrounding(d, [...dbSources, ...newSources], { onProvider: noteProvider, preserveTexts });
           assertUncitedConclusion(d);
           assertCitationMinimums(d, body.minimumFootnotes, body.minimumSources);
           const bodyEnd = d.introduction.length + d.sections.flatMap((section) => section.paragraphs).length;
@@ -157,7 +226,17 @@ export async function POST(req: Request) {
           }
           if (project.wordTarget >= 400) {
             const proseWords = (paragraph: string) => paragraph.replace(/\[\^\d+\]/g, "").split(/\s+/).filter(Boolean).length;
-            if (d.introduction.length !== 1 || d.conclusion.length !== 1 || [...d.introduction, ...d.conclusion].some((paragraph) => proseWords(paragraph) < 30) || d.sections.some((section) => !section.paragraphs.length || section.paragraphs.some((paragraph) => proseWords(paragraph) < 60 || splitSentences(paragraph).length < 3))) {
+            // Mechanically replaced parts belong to the author: their shape
+            // is exempt from minimums (word-target and citation floors still
+            // apply to the essay as a whole).
+            const replacedSection = placement.part === "section" ? placement.sectionIndex : null;
+            const introOk = placement.part === "introduction" || (d.introduction.length === 1 && proseWords(d.introduction[0]) >= 30);
+            const conclOk = placement.part === "conclusion" || (d.conclusion.length === 1 && proseWords(d.conclusion[0]) >= 30);
+            const sectionsOk = d.sections.every((section, index) => {
+              if (index === replacedSection) return section.paragraphs.length > 0;
+              return section.paragraphs.length > 0 && section.paragraphs.every((paragraph) => proseWords(paragraph) >= 60 && splitSentences(paragraph).length >= 3);
+            });
+            if (!introOk || !conclOk || !sectionsOk) {
               throw new Error("Preserve one complete introduction, one complete conclusion, and developed body paragraphs of at least three sentences and 60 words.");
             }
           }
@@ -179,8 +258,14 @@ export async function POST(req: Request) {
     const version = (latest?.version ?? base.version) + 1;
     const rel = await saveDocxFile(body.projectId, version, buffer);
 
+    // Summarize the action, not the raw message: pasted prose would flood
+    // the log (and previously truncated mid-word).
+    const actionBits = [
+      placement.targetLabel ? `Replace ${placement.targetLabel} with supplied text` : verbatim ? "Insert supplied text" : "",
+      cutAtWord(intent.directives, placement.targetLabel || verbatim ? 80 : 140),
+    ].filter(Boolean);
     const summary =
-      `Revision v${version}: ${body.instruction.slice(0, 140)} (${wordCount} words, ${draft.footnotes.length} footnotes).` +
+      `Revision v${version}: ${actionBits.join(" — ") || "Revision"} (${wordCount} words, ${draft.footnotes.length} footnotes).` +
       (newSources.length > 0 ? ` Found ${newSources.length} new source${newSources.length === 1 ? "" : "s"} for this revision.` : "");
     const record = await prisma.essayVersion.create({
       data: {

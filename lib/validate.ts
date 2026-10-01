@@ -401,7 +401,10 @@ export function distinctiveTerms(text: string): string[] {
  * so a lowercase start always means a lost antecedent. Generic cleanup for
  * any verified paragraph. */
 export function tidyVerifiedParagraph(text: string): string {
-  const kept = splitSentences(text)
+  // Style-ban punctuation is normalized here (not deleted): every caller of
+  // the audit — draft, refine, repairs — gets compliant prose, while the
+  // evidence quotes stored separately keep their original characters.
+  const kept = splitSentences(text.replace(/—/g, ", ").replace(/;\s*/g, ". "))
     .map((s) => s.replace(/^\s*[)\]"'›»]+\s*/, "").trim())
     .filter((s) => /[a-z0-9]/i.test(s))
     .map((s) => s.replace(/^(\[\^\d+\]\s*)*([a-z])/, (_m, markers: string | undefined, ch: string) => `${markers || ""}${ch.toUpperCase()}`));

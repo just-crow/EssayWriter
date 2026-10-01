@@ -12,6 +12,7 @@ interface RefineChatProps {
   version: number | null;
   disabled: boolean;
   onRefined: (result: DraftResult) => void;
+  targets?: string[];
 }
 
 interface ChatLine {
@@ -19,16 +20,19 @@ interface ChatLine {
   text: string;
 }
 
-export default function RefineChat({ projectId, versionId, version, disabled, onRefined, minimumFootnotes, minimumSources }: RefineChatProps) {
+export default function RefineChat({ projectId, versionId, version, disabled, onRefined, minimumFootnotes, minimumSources, targets }: RefineChatProps) {
   const { t } = useLanguage();
   const [instruction, setInstruction] = useState("");
+  const [verbatim, setVerbatim] = useState("");
+  const [verbatimTarget, setVerbatimTarget] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<ChatLine[]>([]);
 
   async function send() {
     const text = instruction.trim();
-    if (!text) {
+    const pasted = verbatim.trim();
+    if (!text && !pasted) {
       setError(t("refineErrorEmpty"));
       return;
     }
@@ -38,12 +42,20 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
     }
     setError(null);
     setBusy(true);
-    setLog((prev) => [...prev, { role: "user", text }]);
+    setLog((prev) => [...prev, { role: "user", text: pasted ? `${text}\n\n${t("refineVerbatimLogPrefix")}\n${pasted.slice(0, 300)}${pasted.length > 300 ? "…" : ""}` : text }]);
     try {
       const res = await fetch("/api/refine", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, versionId, instruction: text, minimumFootnotes, minimumSources }),
+        body: JSON.stringify({
+          projectId,
+          versionId,
+          instruction: text || t("refineVerbatimDefaultInstruction"),
+          verbatimText: pasted,
+          verbatimTarget,
+          minimumFootnotes,
+          minimumSources,
+        }),
       });
       const data = (await res.json().catch(() => ({}))) as DraftResult & { error?: string };
       if (!res.ok) throw new Error(data.error || `Refine failed (${res.status}).`);
@@ -54,6 +66,8 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
       onRefined(result);
       setLog((prev) => [...prev, { role: "assistant", text: result.summary }]);
       setInstruction("");
+      setVerbatim("");
+      setVerbatimTarget("");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Refine failed.";
       setError(message);
@@ -100,6 +114,41 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
       <p id="refine-help" className="mt-1 text-xs leading-5 text-stone-600 dark:text-stone-400">
         {t("refineHelp")}
       </p>
+
+      <label htmlFor="refine-verbatim" className="mb-1 mt-3 block text-sm font-semibold text-stone-900 dark:text-stone-100">
+        {t("refineVerbatimLabel")}{" "}
+        <span className="font-normal text-stone-500 dark:text-stone-400">{t("refineVerbatimOptional")}</span>
+      </label>
+      <textarea
+        id="refine-verbatim"
+        value={verbatim}
+        onChange={(e) => setVerbatim(e.target.value)}
+        rows={4}
+        disabled={disabled || busy}
+        placeholder={t("refineVerbatimPlaceholder")}
+        className="w-full resize-y rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm leading-6 text-stone-900 shadow-sm transition placeholder:text-stone-400 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-500 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-100 dark:placeholder:text-stone-500 dark:disabled:bg-stone-800/50 dark:disabled:text-stone-500 dark:focus:border-emerald-500"
+      />
+      {(targets?.length ?? 0) > 0 ? (
+        <div className="mt-2">
+          <label htmlFor="refine-target" className="mb-1 block text-xs font-semibold text-stone-700 dark:text-stone-300">
+            {t("refineTargetLabel")}
+          </label>
+          <select
+            id="refine-target"
+            value={verbatimTarget}
+            onChange={(e) => setVerbatimTarget(e.target.value)}
+            disabled={disabled || busy}
+            className="w-full rounded-lg border border-stone-300 bg-white px-2 py-2 text-sm text-stone-800 shadow-sm focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-200"
+          >
+            <option value="">{t("refineTargetAuto")}</option>
+            {targets!.map((heading) => (
+              <option key={heading} value={heading}>
+                {heading}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
       {error ? (
         <p role="alert" className="mt-1 text-xs font-medium text-red-800 dark:text-red-400">
           {error}
@@ -107,8 +156,8 @@ export default function RefineChat({ projectId, versionId, version, disabled, on
       ) : null}
       <button
         type="button"
-        onClick={send}
-        disabled={disabled || busy || instruction.trim().length === 0}
+          onClick={send}
+          disabled={disabled || busy || (instruction.trim().length === 0 && verbatim.trim().length === 0)}
         className="mt-2 inline-flex items-center justify-center rounded-lg bg-emerald-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-stone-300 disabled:text-stone-500 dark:bg-emerald-700 dark:hover:bg-emerald-600 dark:disabled:bg-stone-800 dark:disabled:text-stone-500"
       >
         {busy ? t("revisingButton") : t("sendButton")}
