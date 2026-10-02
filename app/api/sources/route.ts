@@ -3,6 +3,7 @@ import { z } from "zod";
 import { type SourceItem } from "@/lib/essay-types";
 import { liveSearch, normalizeUrl, extractPages, buildSources, type WebSource } from "@/lib/search";
 import { structuralSectionRole } from "@/lib/paragraph-plan";
+import { cleanTopicForRetrieval } from "@/lib/topic-hygiene";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -36,18 +37,31 @@ export interface SourcesResult {
  * then reserve the last slots for evaluative angles (criticism, evidence,
  * data) so the essay gets counter-arguments instead of descriptive echoes. */
 export function planSourceQueries(topic: string, structureJson: string): Array<{ text: string; label: string }> {
-  const general = { text: topic, label: "general background" };
+  interface OutlineShape {
+    thesis?: string;
+    sections?: Array<{ heading?: string; paragraphs?: Array<{ point?: string }> }>;
+  }
+  let structure: OutlineShape | null = null;
   try {
-    const structure = JSON.parse(structureJson) as {
-      sections?: Array<{ heading?: string; paragraphs?: Array<{ point?: string }> }>;
-    };
+    structure = JSON.parse(structureJson) as OutlineShape;
+  } catch {
+    return [{ text: topic, label: "general background" }];
+  }
+  // A topic box holding an institutional header (school letterhead pasted
+  // from an instruction sheet) would poison every query with school words.
+  // Strip the boilerplate and let the outline — thesis plus sections —
+  // supply the actual subject instead.
+  const cleaned = cleanTopicForRetrieval(topic, structure?.thesis);
+  const effectiveTopic = cleaned.topic || topic;
+  const general = { text: effectiveTopic, label: "general background" };
+  try {
     // Introduction and Conclusion sections frame the essay but need no
     // dedicated evidence searches; the query budget stays on body sections.
-    const sections = (structure.sections ?? []).filter((section) => section.heading?.trim() && !structuralSectionRole(section.heading || ""));
+    const sections = (structure?.sections ?? []).filter((section) => section.heading?.trim() && !structuralSectionRole(section.heading || ""));
     if (!sections.length) return [general];
     const searchStopwords = new Set("about advantages and benefits challenges effects essay evaluation impact limitations of on planning role the with".split(" "));
-    const subject = (topic.toLowerCase().match(/[\p{L}\p{N}-]+/gu) ?? [])
-      .filter((word) => word.length > 2 && !searchStopwords.has(word)).slice(0, 10).join(" ") || topic;
+    const subject = (effectiveTopic.toLowerCase().match(/[\p{L}\p{N}-]+/gu) ?? [])
+      .filter((word) => word.length > 2 && !searchStopwords.has(word)).slice(0, 10).join(" ") || effectiveTopic;
     const headingQueries = sections.map((section) => ({
       text: `${subject} ${section.heading}`.trim(),
       label: `the section “${section.heading}”`,
@@ -87,10 +101,27 @@ export function selectBalancedSources(
   const queryLabels = new Map(queries.map((query) => [query.text, query.label]));
   const chosen: WebSource[] = [];
   const used = new Set<string>();
+  // No single host may take more than a few slots, however well it ranks:
+  // without this, one domain (a school site, a wiki, a study-guide farm)
+  // can fill half the source list on topicality-plus-PageRank alone.
+  const MAX_PER_HOST = 3;
+  const hostCounts = new Map<string, number>();
+  const hostOf = (result: WebSource): string => {
+    try {
+      return new URL(result.url).hostname.toLowerCase().replace(/^www\./, "");
+    } catch {
+      return (result.publisher || "").toLowerCase();
+    }
+  };
   const add = (result: WebSource | undefined) => {
     if (!result || chosen.length >= needed) return;
     const url = normalizeUrl(result.url);
-    if (url && !used.has(url)) { used.add(url); chosen.push(result); }
+    if (!url || used.has(url)) return;
+    const host = hostOf(result);
+    if ((hostCounts.get(host) || 0) >= MAX_PER_HOST) return;
+    used.add(url);
+    hostCounts.set(host, (hostCounts.get(host) || 0) + 1);
+    chosen.push(result);
   };
   for (let round = 0; round < 2 && chosen.length < needed; round++) {
     for (const label of sections) {

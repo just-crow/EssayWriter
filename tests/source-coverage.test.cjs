@@ -13,8 +13,8 @@ test('searches later outline sections before individual points and reserves thei
   assert.ok(queries.some(query => query.label === 'the section “Governance”'));
 
   const results = [
-    ...Array.from({ length: 12 }, (_, i) => ({ title: `Context ${i}`, url: `https://example.org/context-${i}`, query: queries[0].text, score: 1 - i / 100 })),
-    ...sections.slice(1).map((heading, i) => ({ title: heading, url: `https://example.org/${heading}`, query: queries[i + 1].text, score: 0.1 })),
+    ...Array.from({ length: 12 }, (_, i) => ({ title: `Context ${i}`, url: `https://example-${i % 4}.org/context-${i}`, query: queries[0].text, score: 1 - i / 100 })),
+    ...sections.slice(1).map((heading, i) => ({ title: heading, url: `https://section-${i}.org/${heading}`, query: queries[i + 1].text, score: 0.1 })),
   ];
   const selected = selectBalancedSources(results, queries, 12);
   for (const heading of sections.slice(1)) assert.ok(selected.some(item => item.title === heading), `${heading} was skipped`);
@@ -28,6 +28,32 @@ test('a page returned for two queries is not counted as evidence for both sectio
   ]), '28 Sept. 2026');
   assert.match(source.supports, /Benefits/);
   assert.doesNotMatch(source.supports, /Limitations/);
+});
+
+test('no single host may fill the source list', () => {
+  const queries = [{ text: 'q', label: 'general background' }];
+  const results = [
+    ...Array.from({ length: 6 }, (_, i) => ({ title: `School ${i}`, url: `https://school.edu/page-${i}`, query: 'q', score: 1 - i / 100 })),
+    ...Array.from({ length: 6 }, (_, i) => ({ title: `Study ${i}`, url: `https://journal-${i}.org/paper`, query: 'q', score: 0.5 - i / 100 })),
+  ];
+  const selected = selectBalancedSources(results, queries, 9);
+  const schoolPages = selected.filter((item) => item.url.includes('school.edu'));
+  assert.ok(schoolPages.length <= 3, `one host took ${schoolPages.length} slots`);
+  assert.equal(selected.length, 9);
+});
+
+test('institutional headers never reach search queries', () => {
+  const structureJson = JSON.stringify({
+    thesis: 'Should cities invest in urban green spaces?',
+    sections: [{ heading: 'Benefits', paragraphs: [{ point: 'What evidence supports investment?' }] }],
+  });
+  const queries = planSourceQueries(
+    'DRUGA GIMNAZIJA SARAJEVO IB MIDDLE YEARS PROGRAMME YEAR FIVE',
+    structureJson
+  );
+  const joined = queries.map((q) => q.text).join(' ');
+  assert.ok(!/gimnazija|sarajevo|druga/i.test(joined), 'school header leaked into queries');
+  assert.ok(joined.toLowerCase().includes('green spaces'), 'outline supplies the real subject');
 });
 
 test('substantive pages take source slots before category listings', () => {

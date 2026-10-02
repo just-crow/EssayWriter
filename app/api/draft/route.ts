@@ -16,6 +16,7 @@ import { prisma } from "@/lib/db";
 import { normalizeUrl, MAX_SOURCES_JSON_CHARS } from "@/lib/search";
 import { auditAndAlignGrounding } from "@/lib/grounding-audit";
 import { buildWritingPlan, composePlannedDraft, excludedFindingsFor } from "@/lib/planned-writer";
+import { cleanTopicForRetrieval } from "@/lib/topic-hygiene";
 import { structuralSectionRole } from "@/lib/paragraph-plan";
 import { removeOffTopicProse } from "@/lib/topic-relevance";
 import { groupCitationRuns } from "@/lib/citation-runs";
@@ -51,6 +52,15 @@ export async function POST(req: Request) {
     } catch {
       return NextResponse.json({ error: "The outline is invalid. Generate or select an outline before drafting." }, { status: 400 });
     }
+    // Relevance matching must use the essay subject, not institutional
+    // boilerplate pasted into the topic box (same cleaning as retrieval).
+    let outlineThesis = "";
+    try {
+      outlineThesis = (JSON.parse(body.structureJson) as { thesis?: unknown }).thesis as string || "";
+    } catch {
+      // fall through with an empty thesis
+    }
+    const effectiveTopic = cleanTopicForRetrieval(body.topic, outlineThesis).topic || body.topic;
     // Source texts for grounding verification (quote checks run against these).
     let sourceItems;
     try {
@@ -158,13 +168,13 @@ export async function POST(req: Request) {
           // topicality independently (off-topic claims fail verification).
           let offTopic: string[] = [];
           try {
-            offTopic = await removeOffTopicProse(d, body.topic, signal, body.structureJson, noteProvider);
+            offTopic = await removeOffTopicProse(d, effectiveTopic, signal, body.structureJson, noteProvider);
           } catch (error) {
             signal.throwIfAborted();
             diagnostics.topicReviewSkipped = error instanceof Error ? error.message : "Topic review unavailable.";
           }
           diagnostics.stages.push(snapshotDraft(d, "Topic review"));
-          const audit = await auditAndAlignGrounding(d, sourceItems, { signal, batchSize: 2, fast: true, topic: body.topic, onProvider: noteProvider });
+          const audit = await auditAndAlignGrounding(d, sourceItems, { signal, batchSize: 2, fast: true, topic: effectiveTopic, onProvider: noteProvider });
           const removedClaims = [...offTopic, ...audit.removed];
           diagnostics.removed = removedClaims.slice(0, 40);
           diagnostics.stages.push(snapshotDraft(d, "Source verification"));

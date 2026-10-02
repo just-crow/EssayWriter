@@ -12,6 +12,7 @@ import { saveDocxFile } from "@/lib/docx-store";
 import { prisma } from "@/lib/db";
 import { auditAndAlignGrounding } from "@/lib/grounding-audit";
 import { assertCitationMinimums, assertUncitedConclusion } from "@/lib/citation-limits";
+import { cleanTopicForRetrieval } from "@/lib/topic-hygiene";
 import {
   cutAtWord,
   dropDanglingMarkers,
@@ -109,9 +110,12 @@ export async function POST(req: Request) {
       "No new web pages were fetched for this revision; cite only existing footnotes or common knowledge.";
     try {
       const queryBasis = intent.directives || body.instruction;
+      // Stored topics can hold pasted institutional headers; search the
+      // cleaned subject so follow-up queries stay on the essay theme.
+      const queryTopic = cleanTopicForRetrieval(project.topic).topic || project.topic;
       const followQueries = [
-        `${project.topic} ${queryBasis}`.trim().slice(0, 300),
-        project.topic,
+        `${queryTopic} ${queryBasis}`.trim().slice(0, 300),
+        queryTopic,
       ].filter((q, i, arr) => q.length > 0 && arr.indexOf(q) === i).slice(0, 3);
       const prohibitNewSources = /\b(?:do not|don't|without|no)\b[^.!?\n]{0,100}\bsources\b/i.test(body.instruction);
       // Pure replacement / shortening / restructuring of supplied or existing
