@@ -133,6 +133,24 @@ export async function buildDocx(draft: EssayDraft): Promise<Buffer> {
     };
   }
 
+  // Framing ends render with the same labeled headings as body sections, so
+  // the file matches the approved outline (which always opens with an
+  // Introduction section and closes with a Conclusion section).
+  const sectionHeading = (text: string) =>
+    new Paragraph({
+      heading: HeadingLevel.HEADING_1,
+      spacing: { before: 240, after: 120 },
+      children: [
+        new TextRun({
+          text,
+          font: FONT,
+          color: BLACK,
+          size: HEADING_SIZE,
+          bold: true,
+        }),
+      ],
+    });
+
   const children: Paragraph[] = [];
   children.push(
     new Paragraph({
@@ -151,29 +169,17 @@ export async function buildDocx(draft: EssayDraft): Promise<Buffer> {
     })
   );
 
+  if (draft.introduction.some((p) => p.trim())) children.push(sectionHeading("Introduction"));
   for (const p of draft.introduction) children.push(bodyParagraph(p));
 
   for (const sec of draft.sections) {
     if (sec.heading) {
-      children.push(
-        new Paragraph({
-          heading: HeadingLevel.HEADING_1,
-          spacing: { before: 240, after: 120 },
-          children: [
-            new TextRun({
-              text: sec.heading,
-              font: FONT,
-              color: BLACK,
-              size: HEADING_SIZE,
-              bold: true,
-            }),
-          ],
-        })
-      );
+      children.push(sectionHeading(sec.heading));
     }
     for (const p of sec.paragraphs) children.push(bodyParagraph(p));
   }
 
+  if (draft.conclusion.some((p) => p.trim())) children.push(sectionHeading("Conclusion"));
   for (const p of draft.conclusion) children.push(bodyParagraph(p));
 
   if (draft.worksCited.length > 0) {

@@ -97,6 +97,22 @@ test("mixed citation formats, pruning and repeated footnotes keep evidence align
   assert.equal(JSON.stringify(d), snapshot);
 });
 
+test("framing ends render with labeled headings in reading order", async () => {
+  const d = {
+    title: "Essay", introduction: ["Opening."], sections: [{ heading: "Body", paragraphs: ["Claim."] }],
+    conclusion: ["Closing."], footnotes: [], worksCited: ["Entry."], evidence: [], coverage: [],
+  };
+  const zip = await JSZip.loadAsync(await buildDocx(d));
+  const body = await zip.file("word/document.xml").async("string");
+  const order = ["Essay", "Introduction", "Body", "Conclusion", "Works Cited"].map((h) => body.indexOf(`>${h}<`));
+  assert.ok(order.every((i) => i >= 0));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  const emptyZip = await JSZip.loadAsync(await buildDocx({ ...d, introduction: ["   "] }));
+  const empty = await emptyZip.file("word/document.xml").async("string");
+  assert.equal(empty.indexOf(">Introduction<"), -1);
+  assert.ok(empty.indexOf(">Conclusion<") >= 0);
+});
+
 test("unknown citations and ambiguous footnote IDs cannot silently disappear", () => {
   assert.throws(() => prepareDraft(draft({ sections: [{ paragraphs: ["Unsupported.[^99]" ] }] }), sources), /has no footnote/);
   assert.throws(() => prepareDraft(draft({ footnotes: [{ id: 7 }, { id: 7 }] }), sources), /duplicate/);

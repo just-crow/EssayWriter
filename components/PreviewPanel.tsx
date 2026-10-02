@@ -112,6 +112,9 @@ export default function PreviewPanel({
   const fallback = loadedDraft ? (
     <article className="essay-fallback-serif mx-auto max-w-2xl rounded-sm border border-stone-200 bg-white p-6 break-words text-stone-900 shadow-md sm:p-10">
       <h3 className="mt-3 text-center text-xl font-bold">{loadedDraft.title}</h3>
+      {loadedDraft.introduction.some((p) => p.trim()) ? (
+        <h4 className="font-bold">Introduction</h4>
+      ) : null}
       {loadedDraft.introduction.map((p, i) => (
         <p key={`i-${i}`}>{p}</p>
       ))}
@@ -123,6 +126,9 @@ export default function PreviewPanel({
           ))}
         </div>
       ))}
+      {loadedDraft.conclusion.some((p) => p.trim()) ? (
+        <h4 className="font-bold">Conclusion</h4>
+      ) : null}
       {loadedDraft.conclusion.map((p, i) => (
         <p key={`c-${i}`}>{p}</p>
       ))}
